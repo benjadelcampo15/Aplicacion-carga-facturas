@@ -52,6 +52,20 @@ async function buscarDuplicado(clave) {
   return claves.includes(clave);
 }
 
+// Devuelve las filas de datos (sin el header) tal como estan en el Sheet.
+async function leerFilas() {
+  const auth = getAuth();
+  const sheets = google.sheets({ version: 'v4', auth });
+
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+    range: `${SHEET_NAME}!A:L`,
+  });
+
+  const filas = res.data.values || [];
+  return filas.slice(1);
+}
+
 async function appendRow(data, senderInfo) {
   const auth = getAuth();
   const sheets = google.sheets({ version: 'v4', auth });
@@ -91,4 +105,4 @@ async function appendRow(data, senderInfo) {
   console.log('Fila agregada al Sheet:', row);
 }
 
-module.exports = { appendRow, buildClave, buscarDuplicado };
+module.exports = { appendRow, buildClave, buscarDuplicado, leerFilas };
