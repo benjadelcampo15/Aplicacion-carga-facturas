@@ -69,12 +69,31 @@ function diagnosticoPrivateKey(bruta) {
   return null;
 }
 
+// Textos de relleno del .env.example. Copiarlos a produccion sin reemplazar
+// es facil, y el error que sale despues habla de claves invalidas en vez de
+// decir que la variable nunca se cargo.
+const PLACEHOLDERS = [
+  'id_del_google_sheet',
+  'tu_key_aqui',
+  'tu_api_key_de_groq',
+  'tu_service_account@proyecto.iam.gserviceaccount.com',
+];
+
 function validarCredenciales() {
-  const faltantes = ['GOOGLE_SERVICE_ACCOUNT_EMAIL', 'GOOGLE_PRIVATE_KEY', 'GOOGLE_SHEETS_ID']
-    .filter((nombre) => !process.env[nombre]);
+  const requeridas = ['GOOGLE_SERVICE_ACCOUNT_EMAIL', 'GOOGLE_PRIVATE_KEY', 'GOOGLE_SHEETS_ID'];
+  const faltantes = requeridas.filter((nombre) => !process.env[nombre]);
 
   if (faltantes.length) {
     throw new Error(`Faltan variables de entorno: ${faltantes.join(', ')}`);
+  }
+
+  const falsas = requeridas.filter((nombre) => PLACEHOLDERS.some(
+    (relleno) => process.env[nombre].includes(relleno),
+  ));
+  if (falsas.length) {
+    throw new Error(
+      `Estas variables tienen el valor de ejemplo del .env.example, no el real: ${falsas.join(', ')}`,
+    );
   }
 
   const problema = diagnosticoPrivateKey(process.env.GOOGLE_PRIVATE_KEY);
