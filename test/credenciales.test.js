@@ -109,6 +109,30 @@ check('falta el email y lo dice por nombre',
 check('clave rota se explica al arrancar',
   /GOOGLE_PRIVATE_KEY:/.test(validarCon({ ...base, GOOGLE_PRIVATE_KEY: 'rota' }) || ''));
 
+// El bug real: los valores del .env.example llegaron a produccion sin
+// reemplazar, y el error hablaba de base64 en vez de decir esto.
+const conEjemplo = validarCon({ ...base, GOOGLE_SHEETS_ID: 'id_del_google_sheet' }) || '';
+check('detecta el ID de ejemplo',
+  /valor de ejemplo/.test(conEjemplo) && conEjemplo.includes('GOOGLE_SHEETS_ID'));
+check('detecta la clave de ejemplo',
+  /valor de ejemplo/.test(validarCon({
+    ...base,
+    GOOGLE_PRIVATE_KEY: '-----BEGIN PRIVATE KEY-----\ntu_key_aqui\n-----END PRIVATE KEY-----',
+  }) || ''));
+check('detecta el email de ejemplo',
+  /valor de ejemplo/.test(validarCon({
+    ...base,
+    GOOGLE_SERVICE_ACCOUNT_EMAIL: 'tu_service_account@proyecto.iam.gserviceaccount.com',
+  }) || ''));
+const variasDeEjemplo = validarCon({
+  ...base,
+  GOOGLE_SHEETS_ID: 'id_del_google_sheet',
+  GOOGLE_PRIVATE_KEY: '-----BEGIN PRIVATE KEY-----\ntu_key_aqui\n-----END PRIVATE KEY-----',
+}) || '';
+check('nombra todas las variables de ejemplo juntas',
+  variasDeEjemplo.includes('GOOGLE_SHEETS_ID')
+  && variasDeEjemplo.includes('GOOGLE_PRIVATE_KEY'));
+
 let fallos = 0;
 for (const [nombre, ok] of checks) {
   if (!ok) fallos++;
