@@ -84,6 +84,23 @@ const ESTILOS = `
   .btn:hover{background:#26262d}
   .btn.riesgo{color:#fca5a5;border-color:#4a2020}
   .btn.riesgo:hover{background:#2a1a1a}
+  .demo{display:flex;align-items:center;gap:10px;background:#2a2410;
+    border:1px solid #574a12;color:#fbbf24;padding:12px 14px;border-radius:10px;
+    margin-bottom:14px;font-size:13px}
+  .demo strong{font-weight:700;letter-spacing:.04em}
+  .conc{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+  .conc .card .value{font-size:24px}
+  .conc .card.si .value{color:#4ade80}
+  .conc .card.pend .value{color:#fbbf24}
+  .conc .card.no .value{color:#f87171}
+  .conc .card .sub{font-size:12px;color:#8b8b93;margin-top:4px;
+    font-variant-numeric:tabular-nums}
+  .simulado .card{border-style:dashed;opacity:.85}
+  .tag{font-size:10px;font-weight:700;padding:2px 6px;border-radius:4px;
+    letter-spacing:.05em;vertical-align:middle;margin-left:6px}
+  .tag.si{background:#132e1e;color:#4ade80}
+  .tag.pend{background:#2a2410;color:#fbbf24}
+  .tag.no{background:#2e1616;color:#f87171}
 `;
 
 function layout(titulo, refresco, cuerpo) {
@@ -126,18 +143,55 @@ function grafico(serie) {
   return `<div class="chart">${barras}</div>`;
 }
 
+const ETIQUETA = {
+  conciliado: { texto: 'Concilia', clase: 'si' },
+  pendiente: { texto: 'Pendiente', clase: 'pend' },
+  no_concilia: { texto: 'No concilia', clase: 'no' },
+};
+
+function conciliacion(stats) {
+  const { conciliacion: c, conciliacionSimulada } = stats;
+  const total = c.conciliado.cantidad + c.pendiente.cantidad + c.no_concilia.cantidad;
+  const porcentaje = (n) => (total ? Math.round((n / total) * 100) : 0);
+
+  const aviso = conciliacionSimulada ? `
+    <div class="demo">
+      <strong>DATOS SIMULADOS</strong>
+      <span>Todavía no se cruza contra extractos ni facturas. Estos números son
+      inventados y no representan conciliaciones reales.</span>
+    </div>` : '';
+
+  const tarjeta = (clase, titulo, dato) => `
+    <div class="card ${clase}">
+      <div class="label">${titulo}</div>
+      <div class="value">${dato.cantidad}</div>
+      <div class="sub">${porcentaje(dato.cantidad)}% · ${pesos.format(dato.monto)}</div>
+    </div>`;
+
+  return `${aviso}
+    <div class="conc ${conciliacionSimulada ? 'simulado' : ''}">
+      ${tarjeta('si', 'Concilian', c.conciliado)}
+      ${tarjeta('pend', 'Pendientes', c.pendiente)}
+      ${tarjeta('no', 'No concilian', c.no_concilia)}
+    </div>`;
+}
+
 function tabla(ultimas) {
   if (!ultimas.length) {
     return '<div class="vacio">Todavía no hay comprobantes cargados</div>';
   }
 
-  const filas = ultimas.map((c) => `
+  const filas = ultimas.map((c) => {
+    const etiqueta = ETIQUETA[c.conciliado] || ETIQUETA.pendiente;
+    return `
     <tr>
       <td>${esc(horaLocal(c.timestamp))}</td>
-      <td>${esc(c.origen) || '<span style="color:#5c5c66">sin dato</span>'}</td>
+      <td>${esc(c.origen) || '<span style="color:#5c5c66">sin dato</span>'}
+        <span class="tag ${etiqueta.clase}">${etiqueta.texto}</span></td>
       <td style="color:#8b8b93">${esc(c.remitente)}</td>
       <td class="monto">${pesos.format(c.monto)}</td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
 
   return `<table>
     <thead><tr><th>Cargado</th><th>Origen</th><th>Lo mandó</th>
@@ -181,6 +235,11 @@ function dashboard(appState, stats, error) {
         <div class="value">${appState.duplicados}</div>
       </div>
     </div>
+
+    <section>
+      <h2>Conciliación</h2>
+      ${conciliacion(stats)}
+    </section>
 
     <section>
       <h2>Últimos 14 días</h2>

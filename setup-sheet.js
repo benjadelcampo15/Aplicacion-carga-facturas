@@ -29,12 +29,12 @@ async function createSheet() {
 
   await sheets.spreadsheets.values.update({
     spreadsheetId,
-    range: 'Hoja 1!A1:L1',
+    range: 'Hoja 1!A1:M1',
     valueInputOption: 'RAW',
     requestBody: {
       values: [[
         'Timestamp', 'Fecha', 'Tipo', 'Origen', 'Monto', 'CBU', 'Banco',
-        'Referencia', 'Concepto', 'Remitente', 'Telefono', 'Clave',
+        'Referencia', 'Concepto', 'Remitente', 'Telefono', 'Clave', 'Conciliado',
       ]],
     },
   });
