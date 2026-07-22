@@ -1,0 +1,11 @@
+# La CLI no siempre respeta .gitignore al armar el snapshot, y node_modules
+# pesa unos 300 MB: sin esto la subida tarda minutos y a veces se cuelga.
+# Railway instala las dependencias del lado del server igual.
+node_modules
+
+# Credenciales y sesion de WhatsApp: las variables van por el panel, y la
+# sesion vive en el volumen del servicio.
+.env
+auth_info
+
+.git
