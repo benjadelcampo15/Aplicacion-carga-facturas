@@ -2,13 +2,13 @@ require('dotenv').config();
 
 const express = require('express');
 const { startWhatsApp } = require('./whatsapp');
-const { extractData } = require('./gemini');
-const { appendRow } = require('./sheets');
+const { extractData } = require('./extractor');
+const { appendRow, buildClave, buscarDuplicado } = require('./sheets');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-let appState = { qr: null, connected: false, processed: 0, lastError: null };
+let appState = { qr: null, connected: false, processed: 0, duplicados: 0, lastError: null };
 
 app.get('/', (req, res) => {
   if (appState.connected) {
@@ -24,6 +24,7 @@ app.get('/', (req, res) => {
         <div class="status">Conectado a WhatsApp</div>
         <div class="stats">
           <p>Comprobantes procesados: <strong>${appState.processed}</strong></p>
+          <p>Duplicados ignorados: <strong>${appState.duplicados}</strong></p>
           <p>${appState.lastError ? 'Ultimo error: ' + appState.lastError : 'Sin errores'}</p>
         </div>
         <p style="color:#888">Esta pagina se actualiza automaticamente</p>
@@ -63,6 +64,15 @@ async function handleComprobante(sock, from, imageBuffer, mimeType, senderInfo) 
 
     if (data.error) {
       await sock.sendMessage(from, { text: `No pude procesar: ${data.error}` });
+      return;
+    }
+
+    if (await buscarDuplicado(buildClave(data))) {
+      appState.duplicados++;
+      await sock.sendMessage(from, {
+        text: `Este comprobante ya estaba cargado (${data.nombre_origen} - $${data.monto}). No lo dupliqué.`,
+      });
+      console.log(`Duplicado ignorado de ${from}`);
       return;
     }
 
