@@ -1,87 +1,122 @@
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, downloadMediaMessage } = require('@whiskeysockets/baileys');
 const QRCode = require('qrcode');
 
+const RECONEXION_BASE_MS = 1000;
+const RECONEXION_MAX_MS = 60000;
+
 async function startWhatsApp(onReceiveImage, appState) {
-  const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
+  let intentos = 0;
+  let reconexionPendiente = false;
 
-  const sock = makeWASocket({
-    auth: state,
-    printQRInTerminal: false,
-  });
+  function programarReconexion() {
+    // 'close' puede dispararse mas de una vez por el mismo corte.
+    if (reconexionPendiente) return;
+    reconexionPendiente = true;
 
-  sock.ev.on('creds.update', saveCreds);
+    const espera = Math.min(RECONEXION_BASE_MS * 2 ** intentos, RECONEXION_MAX_MS)
+      + Math.floor(Math.random() * 1000);
+    intentos++;
 
-  sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
-    if (qr) {
-      console.log('QR generado, abrí la web para escanearlo');
-      appState.qr = await QRCode.toDataURL(qr);
-      appState.connected = false;
-    }
+    console.log(`Conexion cerrada. Reintento ${intentos} en ${Math.round(espera / 1000)}s...`);
 
-    if (connection === 'close') {
-      appState.connected = false;
-      appState.qr = null;
-      const reason = lastDisconnect?.error?.output?.statusCode;
-      if (reason !== DisconnectReason.loggedOut) {
-        console.log('Conexion cerrada. Reconectando...');
-        startWhatsApp(onReceiveImage, appState);
-      } else {
-        console.log('Sesion cerrada. Eliminá la carpeta auth_info y escaneá de nuevo.');
+    setTimeout(async () => {
+      reconexionPendiente = false;
+      try {
+        await conectar();
+      } catch (err) {
+        console.error('Error reconectando:', err.message);
+        programarReconexion();
       }
-    }
+    }, espera);
+  }
 
-    if (connection === 'open') {
-      console.log('Conectado a WhatsApp');
-      appState.connected = true;
-      appState.qr = null;
-    }
-  });
+  async function conectar() {
+    const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
 
-  sock.ev.on('messages.upsert', async ({ messages }) => {
-    for (const msg of messages) {
-      if (msg.key.fromMe) continue;
+    const sock = makeWASocket({
+      auth: state,
+      printQRInTerminal: false,
+    });
 
-      const from = msg.key.remoteJid;
+    sock.ev.on('creds.update', saveCreds);
 
-      if (from.endsWith('@g.us')) continue;
-
-      const senderName = msg.pushName || 'Desconocido';
-      let senderNumber = from.replace('@s.whatsapp.net', '').replace('@lid', '');
-
-      if (from.endsWith('@lid') && msg.key.participant) {
-        senderNumber = msg.key.participant.replace('@s.whatsapp.net', '').replace('@lid', '');
+    sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
+      if (qr) {
+        console.log('QR generado, abrí la web para escanearlo');
+        appState.qr = await QRCode.toDataURL(qr);
+        appState.connected = false;
       }
 
-      const senderInfo = { name: senderName, number: senderNumber };
+      if (connection === 'close') {
+        appState.connected = false;
+        appState.qr = null;
 
-      const imageMessage = msg.message?.imageMessage;
-      const documentMessage = msg.message?.documentMessage;
-
-      if (imageMessage) {
-        try {
-          const buffer = await downloadMediaMessage(msg, 'buffer', {});
-          const mimeType = imageMessage.mimetype || 'image/jpeg';
-          console.log(`Imagen recibida de ${senderName} (${senderNumber})`);
-          await onReceiveImage(sock, from, buffer, mimeType, senderInfo);
-        } catch (err) {
-          console.error('Error descargando imagen:', err.message);
+        // Baileys destruye sus propios listeners al cerrar (end -> ev.destroy),
+        // asi que el socket viejo no sigue escuchando: solo hay que reconectar.
+        const reason = lastDisconnect?.error?.output?.statusCode;
+        if (reason === DisconnectReason.loggedOut) {
+          console.log('Sesion cerrada. Eliminá la carpeta auth_info y escaneá de nuevo.');
+          return;
         }
-      } else if (documentMessage) {
-        const mimeType = documentMessage.mimetype || '';
-        if (mimeType === 'application/pdf' || mimeType.includes('pdf')) {
+        programarReconexion();
+      }
+
+      if (connection === 'open') {
+        console.log('Conectado a WhatsApp');
+        appState.connected = true;
+        appState.qr = null;
+        intentos = 0;
+      }
+    });
+
+    sock.ev.on('messages.upsert', async ({ messages }) => {
+      for (const msg of messages) {
+        if (msg.key.fromMe) continue;
+
+        const from = msg.key.remoteJid;
+
+        if (from.endsWith('@g.us')) continue;
+
+        const senderName = msg.pushName || 'Desconocido';
+        let senderNumber = from.replace('@s.whatsapp.net', '').replace('@lid', '');
+
+        if (from.endsWith('@lid') && msg.key.participant) {
+          senderNumber = msg.key.participant.replace('@s.whatsapp.net', '').replace('@lid', '');
+        }
+
+        const senderInfo = { name: senderName, number: senderNumber };
+
+        const imageMessage = msg.message?.imageMessage;
+        const documentMessage = msg.message?.documentMessage;
+
+        if (imageMessage) {
           try {
             const buffer = await downloadMediaMessage(msg, 'buffer', {});
-            console.log(`PDF recibido de ${senderName} (${senderNumber})`);
+            const mimeType = imageMessage.mimetype || 'image/jpeg';
+            console.log(`Imagen recibida de ${senderName} (${senderNumber})`);
             await onReceiveImage(sock, from, buffer, mimeType, senderInfo);
           } catch (err) {
-            console.error('Error descargando PDF:', err.message);
+            console.error('Error descargando imagen:', err.message);
+          }
+        } else if (documentMessage) {
+          const mimeType = documentMessage.mimetype || '';
+          if (mimeType === 'application/pdf' || mimeType.includes('pdf')) {
+            try {
+              const buffer = await downloadMediaMessage(msg, 'buffer', {});
+              console.log(`PDF recibido de ${senderName} (${senderNumber})`);
+              await onReceiveImage(sock, from, buffer, mimeType, senderInfo);
+            } catch (err) {
+              console.error('Error descargando PDF:', err.message);
+            }
           }
         }
       }
-    }
-  });
+    });
 
-  return sock;
+    return sock;
+  }
+
+  return conectar();
 }
 
 module.exports = { startWhatsApp };
