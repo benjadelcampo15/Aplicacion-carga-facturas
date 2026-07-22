@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const { google } = require('googleapis');
 
 const SHEET_NAME = 'Hoja 1';
@@ -17,6 +18,20 @@ const PEM = /-----BEGIN ([A-Z ]+)-----([\s\S]*?)-----END \1-----/;
 // En vez de parchear caso por caso, reconstruimos el PEM: nos quedamos con el
 // cuerpo, le sacamos todo el espacio en blanco y lo re-partimos en lineas de
 // 64, que es como tiene que estar.
+function armarPem(tipo, cuerpo) {
+  const lineas = cuerpo.match(/.{1,64}/g) || [];
+  return `-----BEGIN ${tipo}-----\n${lineas.join('\n')}\n-----END ${tipo}-----\n`;
+}
+
+function openSSLLaAcepta(pem) {
+  try {
+    crypto.createPrivateKey(pem);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function normalizarPrivateKey(bruta) {
   let clave = String(bruta ?? '').trim();
 
@@ -25,19 +40,30 @@ function normalizarPrivateKey(bruta) {
     clave = clave.slice(1, -1);
   }
 
-  clave = clave.replace(/\\[nr]/g, '\n').trim();
-
   const partes = clave.match(PEM);
-  if (!partes) return clave;
+  if (!partes) return clave.replace(/\\[nr]/g, '\n').trim();
 
   const [, tipo, cuerpo] = partes;
-  // Ademas del espacio en blanco sacamos barras invertidas sueltas: aparecen
-  // cuando el valor viene doble-escapado (\\n en vez de \n) y el reemplazo de
-  // arriba deja la barra colgada. Una barra nunca es parte de un base64.
-  const limpio = cuerpo.replace(/[\s\\]+/g, '');
-  const lineas = limpio.match(/.{1,64}/g) || [];
 
-  return `-----BEGIN ${tipo}-----\n${lineas.join('\n')}\n-----END ${tipo}-----\n`;
+  // Una barra invertida seguida de "n" puede ser un salto escapado, o una barra
+  // suelta pegada a una letra de la clave: "n" es base64 valido, asi que
+  // mirando el texto no se distinguen. Probamos las dos lecturas y nos
+  // quedamos con la que OpenSSL acepta, en vez de adivinar y comernos una letra.
+  // El "\\+" cubre tanto \n como \\n: el valor puede venir escapado una vez o
+  // dos segun cuantas capas de configuracion haya atravesado.
+  const candidatos = [
+    cuerpo.replace(/\\+[nr]/g, '').replace(/\s+/g, ''),
+    cuerpo.replace(/[\s\\]+/g, ''),
+  ];
+
+  for (const candidato of candidatos) {
+    const pem = armarPem(tipo, candidato);
+    if (openSSLLaAcepta(pem)) return pem;
+  }
+
+  // Ninguna sirve: devolvemos la mas probable para que el diagnostico explique
+  // que le pasa al cuerpo.
+  return armarPem(tipo, candidatos[0]);
 }
 
 // Describe la forma de la clave sin exponerla, para poder diagnosticar desde
