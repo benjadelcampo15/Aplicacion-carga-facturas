@@ -2,7 +2,7 @@ require('dotenv').config();
 
 const { startWhatsApp } = require('./whatsapp');
 const { extractData } = require('./extractor');
-const { appendRow, buildClave, buscarDuplicado } = require('./sheets');
+const { appendRow, buildClave, buscarDuplicado, validarCredenciales } = require('./sheets');
 const { invalidarCache } = require('./stats');
 const { crearApp } = require('./web');
 
@@ -66,12 +66,17 @@ async function main() {
   console.log('Iniciando servicio de conciliación...');
 
   if (!process.env.GROQ_API_KEY) {
-    console.error('Falta GROQ_API_KEY en .env');
+    console.error('Falta GROQ_API_KEY');
     process.exit(1);
   }
-  if (!process.env.GOOGLE_SHEETS_ID) {
-    console.error('Falta GOOGLE_SHEETS_ID en .env');
-    process.exit(1);
+
+  // No cortamos el proceso: si las credenciales estan mal, la web es el unico
+  // lugar donde se puede ver por que. Cortar solo deja a Railway reiniciando.
+  try {
+    validarCredenciales();
+  } catch (err) {
+    console.error('Credenciales de Google mal configuradas:', err.message);
+    appState.lastError = err.message;
   }
 
   // La web tiene que estar arriba antes de conectar: es donde se ve el QR.

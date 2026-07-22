@@ -6,11 +6,44 @@ const SHEET_NAME = 'Hoja 1';
 // chequeo contra el Sheet y el append, cuando entran dos comprobantes juntos.
 const clavesEnProceso = new Set();
 
+const CABECERA_PEM = '-----BEGIN PRIVATE KEY-----';
+
+// dotenv saca las comillas del .env, pero los paneles tipo Railway guardan el
+// valor tal cual se pega. Si quedan, OpenSSL falla con
+// "DECODER routines::unsupported", que no dice nada sobre la causa real.
+function normalizarPrivateKey(bruta) {
+  let clave = String(bruta ?? '').trim();
+
+  const entrecomillada = (c) => clave.length > 1 && clave.startsWith(c) && clave.endsWith(c);
+  if (entrecomillada('"') || entrecomillada("'")) {
+    clave = clave.slice(1, -1);
+  }
+
+  // Segun como se haya pegado, los saltos vienen como \n literal o reales.
+  return clave.replace(/\\n/g, '\n').trim();
+}
+
+function validarCredenciales() {
+  const faltantes = ['GOOGLE_SERVICE_ACCOUNT_EMAIL', 'GOOGLE_PRIVATE_KEY', 'GOOGLE_SHEETS_ID']
+    .filter((nombre) => !process.env[nombre]);
+
+  if (faltantes.length) {
+    throw new Error(`Faltan variables de entorno: ${faltantes.join(', ')}`);
+  }
+
+  if (!normalizarPrivateKey(process.env.GOOGLE_PRIVATE_KEY).startsWith(CABECERA_PEM)) {
+    throw new Error(
+      `GOOGLE_PRIVATE_KEY no arranca con "${CABECERA_PEM}". `
+      + 'Revisá que este completa y sin comillas alrededor.',
+    );
+  }
+}
+
 function getAuth() {
   return new google.auth.GoogleAuth({
     credentials: {
       client_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
-      private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+      private_key: normalizarPrivateKey(process.env.GOOGLE_PRIVATE_KEY),
     },
     scopes: ['https://www.googleapis.com/auth/spreadsheets'],
   });
@@ -105,4 +138,11 @@ async function appendRow(data, senderInfo) {
   console.log('Fila agregada al Sheet:', row);
 }
 
-module.exports = { appendRow, buildClave, buscarDuplicado, leerFilas };
+module.exports = {
+  appendRow,
+  buildClave,
+  buscarDuplicado,
+  leerFilas,
+  normalizarPrivateKey,
+  validarCredenciales,
+};
