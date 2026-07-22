@@ -1,3 +1,6 @@
 node_modules
 .env
 auth_info
+
+# Comprobantes reales para probar a mano. Tienen datos de gente: no se suben.
+test/fixtures

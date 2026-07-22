@@ -1,5 +1,6 @@
 const Groq = require('groq-sdk');
 const pdfParse = require('pdf-parse');
+const { renderizarPrimeraPagina } = require('./pdf');
 
 // Perezoso: creado al importar, el modulo revienta si falta la key antes de que
 // index.js llegue a avisar cual falta.
@@ -169,15 +170,29 @@ async function pedirTexto(text) {
 
 async function extractData(imageBuffer, mimeType) {
   if (mimeType === 'application/pdf' || mimeType.includes('pdf')) {
-    const pdf = await pdfParse(imageBuffer);
-    const text = pdf.text.trim();
+    const pdf = await pdfParse(imageBuffer).catch(() => ({ text: '' }));
+    const text = (pdf.text || '').trim();
 
     if (text && text.length > 20) {
       console.log('PDF con texto, usando extracción de texto...');
       return await extractWithText(text);
     }
 
-    console.log('PDF sin texto, buscando imagen embebida...');
+    // El PDF es una imagen. Renderizamos la pagina y la mandamos a vision:
+    // es lo unico que funciona cuando la imagen viene comprimida adentro.
+    console.log('PDF sin texto, renderizando la página...');
+    try {
+      const render = await renderizarPrimeraPagina(imageBuffer);
+      if (render.paginas > 1) {
+        console.log(`El PDF tiene ${render.paginas} páginas, se usa la primera`);
+      }
+      return await extractWithVision(render.buffer, render.mime);
+    } catch (err) {
+      console.error('No se pudo renderizar el PDF:', err.message);
+    }
+
+    // Ultimo recurso para los PDFs que si traen un JPEG o PNG sin comprimir.
+    console.log('Renderizado fallido, buscando imagen embebida...');
     const image = extractImageFromPdf(imageBuffer);
     if (image) {
       console.log(`Imagen ${image.mime} encontrada en PDF, usando visión...`);
