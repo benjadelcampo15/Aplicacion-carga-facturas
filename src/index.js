@@ -1,60 +1,20 @@
 require('dotenv').config();
 
-const express = require('express');
 const { startWhatsApp } = require('./whatsapp');
 const { extractData } = require('./extractor');
 const { appendRow, buildClave, buscarDuplicado } = require('./sheets');
+const { invalidarCache } = require('./stats');
+const { crearApp } = require('./web');
 
-const app = express();
 const PORT = process.env.PORT || 3000;
 
-let appState = { qr: null, connected: false, processed: 0, duplicados: 0, lastError: null };
-
-app.get('/', (req, res) => {
-  if (appState.connected) {
-    res.send(`
-      <html><head><title>Conciliacion Bot</title>
-      <meta http-equiv="refresh" content="10">
-      <style>body{font-family:sans-serif;max-width:600px;margin:40px auto;text-align:center;background:#111;color:#fff;}
-      .status{background:#22c55e;color:#000;padding:12px 24px;border-radius:8px;font-size:18px;display:inline-block;margin:20px 0;}
-      .stats{background:#222;padding:20px;border-radius:8px;margin:20px 0;text-align:left;}
-      .stats p{margin:8px 0;font-size:16px;}</style></head>
-      <body>
-        <h1>Conciliacion Bot</h1>
-        <div class="status">Conectado a WhatsApp</div>
-        <div class="stats">
-          <p>Comprobantes procesados: <strong>${appState.processed}</strong></p>
-          <p>Duplicados ignorados: <strong>${appState.duplicados}</strong></p>
-          <p>${appState.lastError ? 'Ultimo error: ' + appState.lastError : 'Sin errores'}</p>
-        </div>
-        <p style="color:#888">Esta pagina se actualiza automaticamente</p>
-      </body></html>
-    `);
-  } else if (appState.qr) {
-    res.send(`
-      <html><head><title>Conciliacion Bot - Escanear QR</title>
-      <meta http-equiv="refresh" content="5">
-      <style>body{font-family:sans-serif;max-width:600px;margin:40px auto;text-align:center;background:#111;color:#fff;}
-      img{background:#fff;padding:20px;border-radius:12px;}</style></head>
-      <body>
-        <h1>Conciliacion Bot</h1>
-        <p>Escaneá este QR con WhatsApp</p>
-        <p style="color:#888">WhatsApp > Dispositivos vinculados > Vincular dispositivo</p>
-        <img src="${appState.qr}" />
-      </body></html>
-    `);
-  } else {
-    res.send(`
-      <html><head><title>Conciliacion Bot</title>
-      <meta http-equiv="refresh" content="3">
-      <style>body{font-family:sans-serif;max-width:600px;margin:40px auto;text-align:center;background:#111;color:#fff;}</style></head>
-      <body>
-        <h1>Conciliacion Bot</h1>
-        <p>Conectando...</p>
-      </body></html>
-    `);
-  }
-});
+const appState = {
+  qr: null,
+  connected: false,
+  processed: 0,
+  duplicados: 0,
+  lastError: null,
+};
 
 async function handleComprobante(sock, from, imageBuffer, mimeType, senderInfo) {
   try {
@@ -78,6 +38,7 @@ async function handleComprobante(sock, from, imageBuffer, mimeType, senderInfo) 
 
     await appendRow(data, senderInfo);
     appState.processed++;
+    invalidarCache();
 
     const summary = [
       'Comprobante registrado:',
@@ -113,11 +74,16 @@ async function main() {
     process.exit(1);
   }
 
-  app.listen(PORT, () => {
+  // La web tiene que estar arriba antes de conectar: es donde se ve el QR.
+  const control = {
+    reiniciar: async () => { throw new Error('el servicio todavía está arrancando'); },
+  };
+
+  crearApp(appState, control).listen(PORT, () => {
     console.log(`Web corriendo en puerto ${PORT}`);
   });
 
-  await startWhatsApp(handleComprobante, appState);
+  Object.assign(control, await startWhatsApp(handleComprobante, appState));
 }
 
 main();

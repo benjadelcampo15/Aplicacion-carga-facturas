@@ -1,12 +1,20 @@
+const fs = require('fs/promises');
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, downloadMediaMessage } = require('@whiskeysockets/baileys');
 const QRCode = require('qrcode');
 
 const RECONEXION_BASE_MS = 1000;
 const RECONEXION_MAX_MS = 60000;
 
+// En Railway el filesystem es efimero: apuntar AUTH_DIR a un volumen montado
+// evita tener que re-escanear el QR en cada redeploy.
+const AUTH_DIR = process.env.AUTH_DIR || './auth_info';
+
 async function startWhatsApp(onReceiveImage, appState) {
   let intentos = 0;
   let reconexionPendiente = false;
+  let timerReconexion = null;
+  let sockActual = null;
+  let reinicioEnCurso = false;
 
   function programarReconexion() {
     // 'close' puede dispararse mas de una vez por el mismo corte.
@@ -19,7 +27,7 @@ async function startWhatsApp(onReceiveImage, appState) {
 
     console.log(`Conexion cerrada. Reintento ${intentos} en ${Math.round(espera / 1000)}s...`);
 
-    setTimeout(async () => {
+    timerReconexion = setTimeout(async () => {
       reconexionPendiente = false;
       try {
         await conectar();
@@ -30,13 +38,46 @@ async function startWhatsApp(onReceiveImage, appState) {
     }, espera);
   }
 
+  // Equivale a apagar y volver a prender el proyecto, sin matar el proceso.
+  // Con borrarSesion se descarta el pareo y WhatsApp manda un QR nuevo.
+  async function reiniciar({ borrarSesion = false } = {}) {
+    console.log(borrarSesion ? 'Reinicio manual: borrando sesion' : 'Reinicio manual');
+
+    reinicioEnCurso = true;
+    clearTimeout(timerReconexion);
+    reconexionPendiente = false;
+    intentos = 0;
+
+    appState.connected = false;
+    appState.qr = null;
+
+    if (sockActual) {
+      try {
+        await sockActual.end(new Error('reinicio manual'));
+      } catch (err) {
+        console.error('Error cerrando el socket:', err.message);
+      }
+      sockActual = null;
+    }
+
+    // Recien despues de cerrar: si el socket sigue vivo puede reescribir las
+    // credenciales apenas las borramos.
+    if (borrarSesion) {
+      await fs.rm(AUTH_DIR, { recursive: true, force: true });
+    }
+
+    reinicioEnCurso = false;
+    await conectar();
+  }
+
   async function conectar() {
-    const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
+    const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
 
     const sock = makeWASocket({
       auth: state,
       printQRInTerminal: false,
     });
+    sockActual = sock;
 
     sock.ev.on('creds.update', saveCreds);
 
@@ -51,11 +92,15 @@ async function startWhatsApp(onReceiveImage, appState) {
         appState.connected = false;
         appState.qr = null;
 
+        // Un reinicio manual se encarga el mismo de reconectar.
+        if (reinicioEnCurso) return;
+
         // Baileys destruye sus propios listeners al cerrar (end -> ev.destroy),
         // asi que el socket viejo no sigue escuchando: solo hay que reconectar.
         const reason = lastDisconnect?.error?.output?.statusCode;
         if (reason === DisconnectReason.loggedOut) {
-          console.log('Sesion cerrada. Eliminá la carpeta auth_info y escaneá de nuevo.');
+          console.log('Sesion cerrada. Usá "Desvincular" en la web para escanear de nuevo.');
+          appState.lastError = 'Sesión cerrada desde el teléfono. Desvinculá y escaneá de nuevo.';
           return;
         }
         programarReconexion();
@@ -116,7 +161,8 @@ async function startWhatsApp(onReceiveImage, appState) {
     return sock;
   }
 
-  return conectar();
+  await conectar();
+  return { reiniciar };
 }
 
 module.exports = { startWhatsApp };
