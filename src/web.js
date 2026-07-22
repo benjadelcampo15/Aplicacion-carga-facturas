@@ -77,6 +77,13 @@ const ESTILOS = `
   .err{background:#2a1a1a;border:1px solid #4a2020;color:#fca5a5;
     padding:14px;border-radius:10px;margin-bottom:24px;font-size:13px}
   footer{color:#5c5c66;font-size:12px;text-align:center;margin-top:8px}
+  .acciones{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:24px}
+  .acciones form{margin:0}
+  .btn{font:inherit;font-size:13px;font-weight:600;padding:8px 14px;border-radius:8px;
+    cursor:pointer;background:#1c1c21;color:#e8e8ea;border:1px solid #303038}
+  .btn:hover{background:#26262d}
+  .btn.riesgo{color:#fca5a5;border-color:#4a2020}
+  .btn.riesgo:hover{background:#2a1a1a}
 `;
 
 function layout(titulo, refresco, cuerpo) {
@@ -87,6 +94,22 @@ function layout(titulo, refresco, cuerpo) {
 <meta http-equiv="refresh" content="${refresco}">
 <style>${ESTILOS}</style></head>
 <body><div class="wrap">${cuerpo}</div></body></html>`;
+}
+
+const CONFIRMA_DESVINCULAR = 'Esto borra la sesión de WhatsApp y vas a tener que '
+  + 'escanear un QR nuevo. ¿Seguir?';
+
+// Reemplazan al "matar el proceso y volver a levantarlo".
+function acciones() {
+  return `<div class="acciones">
+    <form method="post" action="/reconectar">
+      <button class="btn" type="submit">Reconectar</button>
+    </form>
+    <form method="post" action="/nueva-sesion"
+      onsubmit="return confirm('${CONFIRMA_DESVINCULAR}')">
+      <button class="btn riesgo" type="submit">Desvincular y generar QR nuevo</button>
+    </form>
+  </div>`;
 }
 
 function grafico(serie) {
@@ -177,6 +200,7 @@ function dashboard(appState, stats, error) {
         ${appState.connected ? 'WhatsApp conectado' : 'Desconectado'}
       </span>
     </header>
+    ${acciones()}
     ${aviso}
     ${contenido}
     <footer>Se actualiza solo cada 15s${appState.lastError ? ` · último error: ${esc(appState.lastError)}` : ''}</footer>`;
@@ -187,23 +211,49 @@ function dashboard(appState, stats, error) {
 function pantallaQR(qr) {
   return layout('Escanear QR', 5, `
     <header><h1>Conciliación de comprobantes</h1></header>
+    ${acciones()}
     <div style="text-align:center">
       <p>Escaneá este QR con WhatsApp</p>
       <p style="color:#8b8b93;font-size:14px">
         WhatsApp &gt; Dispositivos vinculados &gt; Vincular dispositivo</p>
       <img src="${esc(qr)}" alt="Código QR"
         style="background:#fff;padding:16px;border-radius:12px;max-width:100%">
+      <p style="color:#6e6e78;font-size:13px;margin-top:20px">
+        Si escaneaste y quedó trabado, tocá "Desvincular y generar QR nuevo".</p>
     </div>`);
 }
 
 function pantallaConectando() {
   return layout('Conectando', 3, `
     <header><h1>Conciliación de comprobantes</h1></header>
+    ${acciones()}
     <div class="vacio">Conectando con WhatsApp...</div>`);
 }
 
-function crearApp(appState) {
+function crearApp(appState, control) {
   const app = express();
+
+  // El reinicio corta la conexion y vuelve a levantarla; hacerlo dos veces a la
+  // vez deja sockets peleandose por las mismas credenciales.
+  let reiniciando = false;
+
+  async function manejarReinicio(res, borrarSesion) {
+    if (reiniciando) return res.redirect('/');
+
+    reiniciando = true;
+    try {
+      await control.reiniciar({ borrarSesion });
+    } catch (err) {
+      console.error('Error reiniciando:', err.message);
+      appState.lastError = `No pude reiniciar: ${err.message}`;
+    } finally {
+      reiniciando = false;
+    }
+    res.redirect('/');
+  }
+
+  app.post('/reconectar', (req, res) => manejarReinicio(res, false));
+  app.post('/nueva-sesion', (req, res) => manejarReinicio(res, true));
 
   app.get('/', async (req, res) => {
     if (!appState.connected) {

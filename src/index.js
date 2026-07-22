@@ -74,11 +74,16 @@ async function main() {
     process.exit(1);
   }
 
-  crearApp(appState).listen(PORT, () => {
+  // La web tiene que estar arriba antes de conectar: es donde se ve el QR.
+  const control = {
+    reiniciar: async () => { throw new Error('el servicio todavía está arrancando'); },
+  };
+
+  crearApp(appState, control).listen(PORT, () => {
     console.log(`Web corriendo en puerto ${PORT}`);
   });
 
-  await startWhatsApp(handleComprobante, appState);
+  Object.assign(control, await startWhatsApp(handleComprobante, appState));
 }
 
 main();
