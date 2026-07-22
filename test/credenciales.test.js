@@ -23,9 +23,36 @@ function openSSLLaAcepta(clave) {
   }
 }
 
+const CUERPO = privateKey
+  .replace(/-----[A-Z ]+-----/g, '')
+  .replace(/\s+/g, '');
+
+// Reparte el cuerpo en lineas de forma que una arranque con la letra pedida, y
+// las une con el separador dado. "n" y "r" son base64 validos: si los saltos
+// quedaron como barras sueltas, la barra separadora mas la "n" que abre la
+// linea forman la secuencia "\n" sin ser un salto, y quien la trate como salto
+// se come esa letra de la clave.
+function conLineaQueArrancaCon(letra, separador) {
+  const corte = CUERPO.indexOf(letra);
+  if (corte < 1) throw new Error(`el cuerpo generado no tiene "${letra}"`);
+
+  const lineas = [CUERPO.slice(0, corte)];
+  for (let i = corte; i < CUERPO.length; i += 64) {
+    lineas.push(CUERPO.slice(i, i + 64));
+  }
+  return `-----BEGIN PRIVATE KEY-----${separador}${lineas.join(separador)}`
+    + `${separador}-----END PRIVATE KEY-----${separador}`;
+}
+
 // Cada variante es una forma real en que la clave llega rota segun donde se
 // pegue: el .env, el panel de Railway, un campo de una sola linea, etc.
 const variantes = {
+  // Regresion: estos dos fallaban la mitad de las veces, segun si a la clave
+  // generada al azar le tocaba o no una linea empezada en n o r.
+  'barra suelta y linea que arranca con n': conLineaQueArrancaCon('n', '\\'),
+  'barra suelta y linea que arranca con r': conLineaQueArrancaCon('r', '\\'),
+  'escapada y linea que arranca con n': conLineaQueArrancaCon('n', '\\n'),
+  'salto real y linea que arranca con n': conLineaQueArrancaCon('n', '\n'),
   'tal cual (saltos reales)': privateKey,
   'saltos como \\n literal': privateKey.replace(/\n/g, '\\n'),
   'entre comillas dobles': `"${privateKey.replace(/\n/g, '\\n')}"`,

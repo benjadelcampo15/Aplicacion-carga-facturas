@@ -56,6 +56,9 @@ const ESTILOS = `
   .card .value.sm{font-size:20px}
   .card.hoy{border-color:#2b4a35}
   .card.hoy .value{color:#4ade80}
+  .card.pend{border-color:#574a12}
+  .card.pend .value{color:#fbbf24}
+  .card .sub{font-size:12px;color:#8b8b93;margin-top:4px}
   section{margin-bottom:32px}
   .chart{display:flex;align-items:flex-end;gap:5px;height:150px;
     padding:12px;background:#141417;border:1px solid #232328;border-radius:10px}
@@ -233,6 +236,11 @@ function dashboard(appState, stats, error) {
       <div class="card">
         <div class="label">Duplicados ignorados</div>
         <div class="value">${appState.duplicados}</div>
+      </div>
+      <div class="card ${appState.enCola ? 'pend' : ''}">
+        <div class="label">En cola</div>
+        <div class="value">${appState.enCola || 0}</div>
+        ${appState.enCola ? '<div class="sub">esperando a Groq</div>' : ''}
       </div>
     </div>
 

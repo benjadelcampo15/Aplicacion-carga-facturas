@@ -1,7 +1,13 @@
 const Groq = require('groq-sdk');
 const pdfParse = require('pdf-parse');
 
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+// Perezoso: creado al importar, el modulo revienta si falta la key antes de que
+// index.js llegue a avisar cual falta.
+let cliente = null;
+function groq() {
+  if (!cliente) cliente = new Groq({ apiKey: process.env.GROQ_API_KEY });
+  return cliente;
+}
 
 const EXTRACTION_PROMPT = `Analizá este comprobante de pago bancario argentino.
 Extraé los siguientes datos y devolvelos SOLO como JSON válido, sin texto adicional ni markdown ni bloques de código:
@@ -46,10 +52,73 @@ function extractImageFromPdf(pdfBuffer) {
   return null;
 }
 
+const INTENTOS = 4;
+const ESPERA_POR_DEFECTO_MS = 20000;
+const ESPERA_MAXIMA_MS = 90000;
+
+function dormir(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Groq dice exactamente cuanto falta para que se libere la cuota, tanto en la
+// cabecera retry-after como en el texto del error. Respetarlo es mejor que
+// inventar un backoff.
+function esperaTrasRateLimit(err) {
+  if (err?.status !== 429) return null;
+
+  const cabecera = Number(err.headers?.['retry-after']);
+  if (Number.isFinite(cabecera) && cabecera > 0) {
+    return Math.min(cabecera * 1000 + 1000, ESPERA_MAXIMA_MS);
+  }
+
+  const enElTexto = /try again in ([\d.]+)s/i.exec(err.message || '');
+  if (enElTexto) {
+    return Math.min(Number(enElTexto[1]) * 1000 + 1000, ESPERA_MAXIMA_MS);
+  }
+
+  return ESPERA_POR_DEFECTO_MS;
+}
+
+// El modelo a veces devuelve texto en vez de JSON. Reintentar suele alcanzar,
+// y es preferible a descartarle el comprobante a alguien.
+function esReintentable(err) {
+  return err?.status === 429
+    || err?.status >= 500
+    || /No se obtuvo JSON válido/.test(err?.message || '');
+}
+
+// esperar se puede reemplazar en los tests: si no, la suite se pasa un minuto
+// durmiendo esperas de rate limit de verdad.
+async function conReintentos(descripcion, fn, { esperar = dormir } = {}) {
+  let ultimo;
+
+  for (let intento = 1; intento <= INTENTOS; intento++) {
+    try {
+      return await fn();
+    } catch (err) {
+      ultimo = err;
+      if (!esReintentable(err) || intento === INTENTOS) break;
+
+      const espera = esperaTrasRateLimit(err) ?? 2000 * intento;
+      console.log(
+        `${descripcion}: intento ${intento} fallo (${err.status || err.message}). `
+        + `Reintento en ${Math.round(espera / 1000)}s`,
+      );
+      await esperar(espera);
+    }
+  }
+
+  throw ultimo;
+}
+
 async function extractWithVision(imageBuffer, mimeType) {
+  return conReintentos('vision', () => pedirVision(imageBuffer, mimeType));
+}
+
+async function pedirVision(imageBuffer, mimeType) {
   const base64Image = imageBuffer.toString('base64');
 
-  const result = await groq.chat.completions.create({
+  const result = await groq().chat.completions.create({
     model: 'qwen/qwen3.6-27b',
     messages: [
       {
@@ -76,7 +145,11 @@ async function extractWithVision(imageBuffer, mimeType) {
 }
 
 async function extractWithText(text) {
-  const result = await groq.chat.completions.create({
+  return conReintentos('texto', () => pedirTexto(text));
+}
+
+async function pedirTexto(text) {
+  const result = await groq().chat.completions.create({
     model: 'llama-3.3-70b-versatile',
     messages: [
       {
@@ -117,4 +190,4 @@ async function extractData(imageBuffer, mimeType) {
   return await extractWithVision(imageBuffer, mimeType);
 }
 
-module.exports = { extractData };
+module.exports = { extractData, esperaTrasRateLimit, esReintentable, conReintentos };
