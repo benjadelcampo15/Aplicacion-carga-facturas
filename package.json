@@ -5,6 +5,7 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
+    "check:sheets": "node scripts/check-sheets.js",
     "test": "node test/clave.test.js && node test/web.test.js && node test/reinicio.test.js && node test/credenciales.test.js"
   },
   "keywords": [],
