@@ -36,6 +36,11 @@ const variantes = {
   'con espacios alrededor': `   ${privateKey}   `,
   'lineas mal cortadas': privateKey.replace(/\n/g, '\n  '),
   'comillas y espacios juntos': `  "${privateKey.replace(/\n/g, '\\n')}"  `,
+  // El caso que aparecio en produccion: el valor llega doble-escapado, el
+  // reemplazo de \n deja barras invertidas colgadas dentro del base64.
+  'doble escapado (\\\\n)': privateKey.replace(/\n/g, '\\\\n'),
+  'barras invertidas sueltas': privateKey.replace(/\n/g, '\\'),
+  'mezcla de \\r\\n escapados': privateKey.replace(/\n/g, '\\r\\n'),
 };
 
 for (const [nombre, variante] of Object.entries(variantes)) {
@@ -63,6 +68,15 @@ check('truncada avisa que esta truncada',
 check('cuerpo con basura avisa que no es base64',
   /base64/.test(diagnosticoPrivateKey(
     `-----BEGIN PRIVATE KEY-----\n${'!@#$%'.repeat(300)}\n-----END PRIVATE KEY-----`) || ''));
+
+// El mensaje tiene que nombrar los caracteres que sobran, no decir "no es
+// base64" y dejarte adivinando.
+const conBasura = diagnosticoPrivateKey(
+  `-----BEGIN PRIVATE KEY-----\n${'A'.repeat(1600)}!?\n-----END PRIVATE KEY-----`) || '';
+check('el diagnostico lista los caracteres sobrantes',
+  conBasura.includes('"!"') && conBasura.includes('"?"'));
+check('el doble escapado ya no llega al diagnostico',
+  diagnosticoPrivateKey(privateKey.replace(/\n/g, '\\\\n')) === null);
 check('el diagnostico nunca incluye la clave',
   !JSON.stringify(Object.values(variantes).map(diagnosticoPrivateKey))
     .includes(privateKey.split('\n')[1]));

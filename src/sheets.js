@@ -25,13 +25,16 @@ function normalizarPrivateKey(bruta) {
     clave = clave.slice(1, -1);
   }
 
-  clave = clave.replace(/\\n/g, '\n').trim();
+  clave = clave.replace(/\\[nr]/g, '\n').trim();
 
   const partes = clave.match(PEM);
   if (!partes) return clave;
 
   const [, tipo, cuerpo] = partes;
-  const limpio = cuerpo.replace(/\s+/g, '');
+  // Ademas del espacio en blanco sacamos barras invertidas sueltas: aparecen
+  // cuando el valor viene doble-escapado (\\n en vez de \n) y el reemplazo de
+  // arriba deja la barra colgada. Una barra nunca es parte de un base64.
+  const limpio = cuerpo.replace(/[\s\\]+/g, '');
   const lineas = limpio.match(/.{1,64}/g) || [];
 
   return `-----BEGIN ${tipo}-----\n${lineas.join('\n')}\n-----END ${tipo}-----\n`;
@@ -41,7 +44,7 @@ function normalizarPrivateKey(bruta) {
 // la web sin que el secreto aparezca en pantalla ni en los logs.
 function diagnosticoPrivateKey(bruta) {
   const original = String(bruta ?? '');
-  const partes = original.replace(/\\n/g, '\n').match(PEM);
+  const partes = normalizarPrivateKey(original).match(PEM);
 
   if (!partes) {
     return `no encontre un bloque PEM completo (largo: ${original.length}). `
@@ -49,9 +52,16 @@ function diagnosticoPrivateKey(bruta) {
   }
 
   const cuerpo = partes[2].replace(/\s+/g, '');
-  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(cuerpo)) {
-    return 'el cuerpo tiene caracteres que no son base64. Se copio incompleta o mal.';
+
+  const sobrantes = [...new Set(cuerpo.replace(/[A-Za-z0-9+/=]/g, ''))];
+  if (sobrantes.length) {
+    // Los caracteres que sobran no son secretos y son justo lo que hace falta
+    // saber para entender como se rompio el valor al pegarlo.
+    const listado = sobrantes.map((c) => JSON.stringify(c)).join(', ');
+    return `al cuerpo le sobran estos caracteres que no son base64: ${listado}. `
+      + 'Copiá de nuevo el campo private_key del JSON, sin escaparlo.';
   }
+
   // Una clave RSA de 2048 bits en PKCS#8 ronda los 1600 caracteres.
   if (cuerpo.length < 1000) {
     return `el cuerpo tiene solo ${cuerpo.length} caracteres, parece truncada.`;
