@@ -1,32 +1,72 @@
-const { normalizarPrivateKey, validarCredenciales } = require('../src/sheets');
-
-const CUERPO = 'MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQfake';
-const PEM = `-----BEGIN PRIVATE KEY-----\n${CUERPO}\n-----END PRIVATE KEY-----\n`;
-const PEM_ESCAPADO = `-----BEGIN PRIVATE KEY-----\\n${CUERPO}\\n-----END PRIVATE KEY-----\\n`;
+const crypto = require('crypto');
+const { normalizarPrivateKey, diagnosticoPrivateKey, validarCredenciales } = require('../src/sheets');
 
 const checks = [];
 function check(nombre, ok) {
   checks.push([nombre, ok]);
 }
 
-const valida = (clave) => normalizarPrivateKey(clave).startsWith('-----BEGIN PRIVATE KEY-----')
-  && normalizarPrivateKey(clave).includes('\n');
+// Clave real, para que la prueba sea que OpenSSL la parsea, no que el string
+// tenga la pinta correcta.
+const { privateKey } = crypto.generateKeyPairSync('rsa', {
+  modulusLength: 2048,
+  privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+  publicKeyEncoding: { type: 'spki', format: 'pem' },
+});
 
-// Como queda al pegarla en el panel de Railway con las comillas del .env.
-check('comillas dobles alrededor', valida(`"${PEM_ESCAPADO}"`));
-check('comillas simples alrededor', valida(`'${PEM_ESCAPADO}'`));
-check('saltos escapados sin comillas', valida(PEM_ESCAPADO));
-check('saltos reales sin comillas', valida(PEM));
-check('saltos reales con comillas', valida(`"${PEM}"`));
-check('espacios alrededor', valida(`   ${PEM_ESCAPADO}   `));
+function openSSLLaAcepta(clave) {
+  try {
+    crypto.createPrivateKey(normalizarPrivateKey(clave));
+    return true;
+  } catch {
+    return false;
+  }
+}
 
-check('los saltos escapados se convierten',
-  normalizarPrivateKey(PEM_ESCAPADO).split('\n').length === 3);
-check('no rompe una clave ya limpia',
-  normalizarPrivateKey(PEM) === PEM.trim());
+// Cada variante es una forma real en que la clave llega rota segun donde se
+// pegue: el .env, el panel de Railway, un campo de una sola linea, etc.
+const variantes = {
+  'tal cual (saltos reales)': privateKey,
+  'saltos como \\n literal': privateKey.replace(/\n/g, '\\n'),
+  'entre comillas dobles': `"${privateKey.replace(/\n/g, '\\n')}"`,
+  'entre comillas simples': `'${privateKey.replace(/\n/g, '\\n')}'`,
+  'saltos convertidos en espacios': privateKey.replace(/\n/g, ' '),
+  'saltos perdidos del todo': privateKey.replace(/\n/g, ''),
+  'saltos de Windows': privateKey.replace(/\n/g, '\r\n'),
+  'con espacios alrededor': `   ${privateKey}   `,
+  'lineas mal cortadas': privateKey.replace(/\n/g, '\n  '),
+  'comillas y espacios juntos': `  "${privateKey.replace(/\n/g, '\\n')}"  `,
+};
+
+for (const [nombre, variante] of Object.entries(variantes)) {
+  check(`OpenSSL parsea: ${nombre}`, openSSLLaAcepta(variante));
+}
+
+// La clave reconstruida tiene que ser la misma, no una que solo parsea.
+const original = crypto.createPrivateKey(privateKey).export({ type: 'pkcs8', format: 'pem' });
+const reconstruida = crypto
+  .createPrivateKey(normalizarPrivateKey(privateKey.replace(/\n/g, '')))
+  .export({ type: 'pkcs8', format: 'pem' });
+check('la clave reconstruida es identica a la original', original === reconstruida);
+
 check('no revienta con undefined', normalizarPrivateKey(undefined) === '');
 
-// La validacion tiene que explicar el problema, no tirar el error de OpenSSL.
+// El diagnostico tiene que nombrar el problema, no repetir el error de OpenSSL.
+check('clave sana no reporta problemas', diagnosticoPrivateKey(privateKey) === null);
+check('clave entrecomillada no reporta problemas',
+  diagnosticoPrivateKey(privateKey.replace(/\n/g, '\\n')) === null);
+check('sin bloque PEM avisa que falta BEGIN/END',
+  /bloque PEM completo/.test(diagnosticoPrivateKey('cualquier cosa') || ''));
+check('truncada avisa que esta truncada',
+  /truncada/.test(diagnosticoPrivateKey(
+    '-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkq\n-----END PRIVATE KEY-----') || ''));
+check('cuerpo con basura avisa que no es base64',
+  /base64/.test(diagnosticoPrivateKey(
+    `-----BEGIN PRIVATE KEY-----\n${'!@#$%'.repeat(300)}\n-----END PRIVATE KEY-----`) || ''));
+check('el diagnostico nunca incluye la clave',
+  !JSON.stringify(Object.values(variantes).map(diagnosticoPrivateKey))
+    .includes(privateKey.split('\n')[1]));
+
 function validarCon(env) {
   const previo = { ...process.env };
   Object.assign(process.env, env);
@@ -43,17 +83,17 @@ function validarCon(env) {
 const base = {
   GOOGLE_SERVICE_ACCOUNT_EMAIL: 'x@y.iam.gserviceaccount.com',
   GOOGLE_SHEETS_ID: 'abc123',
-  GOOGLE_PRIVATE_KEY: PEM_ESCAPADO,
+  GOOGLE_PRIVATE_KEY: privateKey,
 };
 
 check('credenciales validas pasan', validarCon(base) === null);
 check('credenciales entrecomilladas pasan',
-  validarCon({ ...base, GOOGLE_PRIVATE_KEY: `"${PEM_ESCAPADO}"` }) === null);
-check('clave truncada avisa que no es PEM',
-  /no arranca con/.test(validarCon({ ...base, GOOGLE_PRIVATE_KEY: CUERPO }) || ''));
+  validarCon({ ...base, GOOGLE_PRIVATE_KEY: `"${privateKey.replace(/\n/g, '\\n')}"` }) === null);
 check('falta el email y lo dice por nombre',
   /GOOGLE_SERVICE_ACCOUNT_EMAIL/.test(
     validarCon({ ...base, GOOGLE_SERVICE_ACCOUNT_EMAIL: '' }) || ''));
+check('clave rota se explica al arrancar',
+  /GOOGLE_PRIVATE_KEY:/.test(validarCon({ ...base, GOOGLE_PRIVATE_KEY: 'rota' }) || ''));
 
 let fallos = 0;
 for (const [nombre, ok] of checks) {

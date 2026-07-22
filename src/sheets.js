@@ -6,11 +6,17 @@ const SHEET_NAME = 'Hoja 1';
 // chequeo contra el Sheet y el append, cuando entran dos comprobantes juntos.
 const clavesEnProceso = new Set();
 
-const CABECERA_PEM = '-----BEGIN PRIVATE KEY-----';
+const PEM = /-----BEGIN ([A-Z ]+)-----([\s\S]*?)-----END \1-----/;
 
-// dotenv saca las comillas del .env, pero los paneles tipo Railway guardan el
-// valor tal cual se pega. Si quedan, OpenSSL falla con
-// "DECODER routines::unsupported", que no dice nada sobre la causa real.
+// La clave viaja mal de mil formas segun donde se pegue: dotenv le saca las
+// comillas al .env pero Railway las guarda; los saltos pueden llegar como \n
+// literal, como saltos reales, convertidos en espacios, o directamente
+// perdidos. En todos esos casos OpenSSL tira el mismo
+// "DECODER routines::unsupported", que no dice nada.
+//
+// En vez de parchear caso por caso, reconstruimos el PEM: nos quedamos con el
+// cuerpo, le sacamos todo el espacio en blanco y lo re-partimos en lineas de
+// 64, que es como tiene que estar.
 function normalizarPrivateKey(bruta) {
   let clave = String(bruta ?? '').trim();
 
@@ -19,8 +25,38 @@ function normalizarPrivateKey(bruta) {
     clave = clave.slice(1, -1);
   }
 
-  // Segun como se haya pegado, los saltos vienen como \n literal o reales.
-  return clave.replace(/\\n/g, '\n').trim();
+  clave = clave.replace(/\\n/g, '\n').trim();
+
+  const partes = clave.match(PEM);
+  if (!partes) return clave;
+
+  const [, tipo, cuerpo] = partes;
+  const limpio = cuerpo.replace(/\s+/g, '');
+  const lineas = limpio.match(/.{1,64}/g) || [];
+
+  return `-----BEGIN ${tipo}-----\n${lineas.join('\n')}\n-----END ${tipo}-----\n`;
+}
+
+// Describe la forma de la clave sin exponerla, para poder diagnosticar desde
+// la web sin que el secreto aparezca en pantalla ni en los logs.
+function diagnosticoPrivateKey(bruta) {
+  const original = String(bruta ?? '');
+  const partes = original.replace(/\\n/g, '\n').match(PEM);
+
+  if (!partes) {
+    return `no encontre un bloque PEM completo (largo: ${original.length}). `
+      + 'Revisá que esten las lineas BEGIN y END y que no este cortada.';
+  }
+
+  const cuerpo = partes[2].replace(/\s+/g, '');
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(cuerpo)) {
+    return 'el cuerpo tiene caracteres que no son base64. Se copio incompleta o mal.';
+  }
+  // Una clave RSA de 2048 bits en PKCS#8 ronda los 1600 caracteres.
+  if (cuerpo.length < 1000) {
+    return `el cuerpo tiene solo ${cuerpo.length} caracteres, parece truncada.`;
+  }
+  return null;
 }
 
 function validarCredenciales() {
@@ -31,11 +67,9 @@ function validarCredenciales() {
     throw new Error(`Faltan variables de entorno: ${faltantes.join(', ')}`);
   }
 
-  if (!normalizarPrivateKey(process.env.GOOGLE_PRIVATE_KEY).startsWith(CABECERA_PEM)) {
-    throw new Error(
-      `GOOGLE_PRIVATE_KEY no arranca con "${CABECERA_PEM}". `
-      + 'Revisá que este completa y sin comillas alrededor.',
-    );
+  const problema = diagnosticoPrivateKey(process.env.GOOGLE_PRIVATE_KEY);
+  if (problema) {
+    throw new Error(`GOOGLE_PRIVATE_KEY: ${problema}`);
   }
 }
 
@@ -144,5 +178,6 @@ module.exports = {
   buscarDuplicado,
   leerFilas,
   normalizarPrivateKey,
+  diagnosticoPrivateKey,
   validarCredenciales,
 };
