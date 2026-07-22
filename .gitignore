@@ -1,5 +1,9 @@
 node_modules
 .env
+
+# Sesion de WhatsApp y comprobantes que fallaron. En produccion vive en el
+# volumen; local queda acá. Son datos de gente, no se suben.
+data
 auth_info
 
 # Comprobantes reales para probar a mano. Tienen datos de gente: no se suben.

@@ -7,5 +7,6 @@ node_modules
 # sesion vive en el volumen del servicio.
 .env
 auth_info
+data
 
 .git

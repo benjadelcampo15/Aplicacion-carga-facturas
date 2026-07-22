@@ -1,5 +1,6 @@
 const express = require('express');
 const { getStats } = require('./stats');
+const { listarErrores, leerArchivo } = require('./errores');
 
 const ZONA = 'America/Argentina/Buenos_Aires';
 
@@ -104,6 +105,9 @@ const ESTILOS = `
   .tag.si{background:#132e1e;color:#4ade80}
   .tag.pend{background:#2a2410;color:#fbbf24}
   .tag.no{background:#2e1616;color:#f87171}
+  .link{color:#7aa2f7;text-decoration:none;font-weight:600}
+  .link:hover{text-decoration:underline}
+  td.motivo{color:#fca5a5;font-size:12px;max-width:320px}
 `;
 
 function layout(titulo, refresco, cuerpo) {
@@ -179,6 +183,30 @@ function conciliacion(stats) {
     </div>`;
 }
 
+function tablaErrores(errores) {
+  if (!errores.length) {
+    return '<div class="vacio">No hay comprobantes con error</div>';
+  }
+
+  const filas = errores.map((e) => {
+    const archivo = e.disponible
+      ? `<a class="link" href="/errores/${encodeURIComponent(e.archivo)}" target="_blank">Ver</a>`
+      : '<span style="color:#5c5c66">no disponible</span>';
+
+    return `
+    <tr>
+      <td>${esc(horaLocal(e.timestamp))}</td>
+      <td>${esc(e.remitente) || '<span style="color:#5c5c66">sin dato</span>'}</td>
+      <td class="motivo">${esc(e.motivo)}</td>
+      <td>${archivo}</td>
+    </tr>`;
+  }).join('');
+
+  return `<table>
+    <thead><tr><th>Cuándo</th><th>Lo mandó</th><th>Motivo</th><th>Archivo</th></tr></thead>
+    <tbody>${filas}</tbody></table>`;
+}
+
 function tabla(ultimas) {
   if (!ultimas.length) {
     return '<div class="vacio">Todavía no hay comprobantes cargados</div>';
@@ -202,7 +230,7 @@ function tabla(ultimas) {
     <tbody>${filas}</tbody></table>`;
 }
 
-function dashboard(appState, stats, error) {
+function dashboard(appState, stats, error, errores = []) {
   const promedio = stats && stats.diasActivos
     ? (stats.totalCargas / stats.diasActivos).toFixed(1)
     : '0';
@@ -257,6 +285,11 @@ function dashboard(appState, stats, error) {
     <section>
       <h2>Últimas cargas</h2>
       ${tabla(stats.ultimas)}
+    </section>
+
+    <section>
+      <h2>Comprobantes con error${errores.length ? ` (${errores.length})` : ''}</h2>
+      ${tablaErrores(errores)}
     </section>
   ` : '';
 
@@ -330,12 +363,28 @@ function crearApp(appState, control) {
     // Si el Sheet falla igual mostramos la pagina: el estado de la conexion
     // es lo mas importante y no depende de Google.
     try {
-      const stats = await getStats();
-      res.send(dashboard(appState, stats, null));
+      const [stats, errores] = await Promise.all([
+        getStats(),
+        listarErrores().catch(() => []),
+      ]);
+      res.send(dashboard(appState, stats, null, errores));
     } catch (err) {
       console.error('Error leyendo stats:', err.message);
       res.send(dashboard(appState, null, err.message));
     }
+  });
+
+  // El nombre viene de una celda del Sheet y termina en una ruta del disco:
+  // leerArchivo lo valida antes de tocar el filesystem.
+  app.get('/errores/:archivo', async (req, res) => {
+    const contenido = await leerArchivo(req.params.archivo);
+    if (!contenido) return res.status(404).send('No encontrado');
+
+    const extension = req.params.archivo.split('.').pop().toLowerCase();
+    const tipos = {
+      jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp', pdf: 'application/pdf',
+    };
+    res.type(tipos[extension] || 'application/octet-stream').send(contenido);
   });
 
   app.get('/health', (req, res) => {
