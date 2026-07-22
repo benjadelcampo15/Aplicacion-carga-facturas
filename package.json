@@ -7,7 +7,7 @@
     "start": "node src/index.js",
     "check:sheets": "node scripts/check-sheets.js",
     "push:vars": "node scripts/push-vars.js",
-    "test": "node test/clave.test.js && node test/web.test.js && node test/reinicio.test.js && node test/credenciales.test.js && node test/conciliacion.test.js && node test/cola.test.js && node test/pdf.test.js"
+    "test": "node test/clave.test.js && node test/web.test.js && node test/reinicio.test.js && node test/credenciales.test.js && node test/conciliacion.test.js && node test/cola.test.js && node test/pdf.test.js && node test/errores.test.js"
   },
   "keywords": [],
   "author": "",

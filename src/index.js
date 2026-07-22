@@ -6,6 +6,7 @@ const { appendRow, buildClave, buscarDuplicado, validarCredenciales } = require(
 const { invalidarCache } = require('./stats');
 const { crearApp } = require('./web');
 const { crearCola } = require('./cola');
+const { guardarFallido } = require('./errores');
 
 const PORT = process.env.PORT || 3000;
 
@@ -15,6 +16,7 @@ const appState = {
   processed: 0,
   duplicados: 0,
   enCola: 0,
+  fallidos: 0,
   lastError: null,
 };
 
@@ -79,6 +81,17 @@ async function procesarComprobante(sock, from, imageBuffer, mimeType, senderInfo
   } catch (err) {
     console.error('Error procesando comprobante:', err.message);
     appState.lastError = err.message;
+
+    // Se guarda el archivo original: sin esto el comprobante se pierde y hay
+    // que ir a pedirselo de nuevo a quien lo mando.
+    await guardarFallido({
+      buffer: imageBuffer,
+      mimeType,
+      senderInfo,
+      motivo: err.message,
+    });
+    appState.fallidos++;
+
     await sock.sendMessage(from, { text: mensajeDeError(err) });
   }
 }

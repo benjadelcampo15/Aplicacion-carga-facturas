@@ -2,6 +2,8 @@ const crypto = require('crypto');
 const { google } = require('googleapis');
 
 const SHEET_NAME = 'Hoja 1';
+const HOJA_ERRORES = 'Errores';
+const HEADERS_ERRORES = ['Timestamp', 'Remitente', 'Telefono', 'Motivo', 'Archivo', 'Tipo'];
 
 // Claves ya escritas por este proceso. Cierra la ventana de carrera entre el
 // chequeo contra el Sheet y el append, cuando entran dos comprobantes juntos.
@@ -174,6 +176,78 @@ async function buscarDuplicado(clave) {
   return claves.includes(clave);
 }
 
+// La pestaña de errores se crea sola la primera vez que algo falla, para no
+// obligar a tocar el Sheet a mano.
+let erroresListos = false;
+
+async function asegurarHojaErrores(sheets) {
+  if (erroresListos) return;
+
+  const libro = await sheets.spreadsheets.get({
+    spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+  });
+  const existe = libro.data.sheets
+    .some((hoja) => hoja.properties.title === HOJA_ERRORES);
+
+  if (!existe) {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+      requestBody: {
+        requests: [{ addSheet: { properties: { title: HOJA_ERRORES } } }],
+      },
+    });
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+      range: `${HOJA_ERRORES}!A1:F1`,
+      valueInputOption: 'RAW',
+      requestBody: { values: [HEADERS_ERRORES] },
+    });
+    console.log(`Pestaña "${HOJA_ERRORES}" creada en el Sheet`);
+  }
+
+  erroresListos = true;
+}
+
+async function appendError({ motivo, archivo, tipo, senderInfo }) {
+  const auth = getAuth();
+  const sheets = google.sheets({ version: 'v4', auth });
+
+  await asegurarHojaErrores(sheets);
+
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+    range: `${HOJA_ERRORES}!A:F`,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: {
+      values: [[
+        new Date().toISOString(),
+        senderInfo?.name || '',
+        senderInfo?.number || '',
+        motivo || '',
+        archivo || '',
+        tipo || '',
+      ]],
+    },
+  });
+}
+
+async function leerErrores() {
+  const auth = getAuth();
+  const sheets = google.sheets({ version: 'v4', auth });
+
+  try {
+    const res = await sheets.spreadsheets.values.get({
+      spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+      range: `${HOJA_ERRORES}!A:F`,
+    });
+    return (res.data.values || []).slice(1);
+  } catch (err) {
+    // Todavia no fallo nada, asi que la pestaña no existe. No es un error.
+    if (/Unable to parse range/i.test(err.message)) return [];
+    throw err;
+  }
+}
+
 // Devuelve las filas de datos (sin el header) tal como estan en el Sheet.
 async function leerFilas() {
   const auth = getAuth();
@@ -235,4 +309,7 @@ module.exports = {
   normalizarPrivateKey,
   diagnosticoPrivateKey,
   validarCredenciales,
+  appendError,
+  leerErrores,
+  HOJA_ERRORES,
 };

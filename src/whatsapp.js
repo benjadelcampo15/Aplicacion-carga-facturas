@@ -1,13 +1,16 @@
 const fs = require('fs/promises');
+const path = require('path');
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, downloadMediaMessage } = require('@whiskeysockets/baileys');
 const QRCode = require('qrcode');
 
 const RECONEXION_BASE_MS = 1000;
 const RECONEXION_MAX_MS = 60000;
 
-// En Railway el filesystem es efimero: apuntar AUTH_DIR a un volumen montado
-// evita tener que re-escanear el QR en cada redeploy.
-const AUTH_DIR = process.env.AUTH_DIR || './auth_info';
+// En Railway el filesystem es efimero: DATA_DIR apunta al volumen montado, y
+// adentro viven tanto la sesion de WhatsApp como los comprobantes fallados.
+// AUTH_DIR sigue existiendo aparte para no romper instalaciones que ya lo usan.
+const DATA_DIR = process.env.DATA_DIR || './data';
+const AUTH_DIR = process.env.AUTH_DIR || path.join(DATA_DIR, 'auth_info');
 
 async function startWhatsApp(onReceiveImage, appState) {
   let intentos = 0;
