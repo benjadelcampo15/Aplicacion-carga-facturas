@@ -2,6 +2,7 @@ const Groq = require('groq-sdk');
 const pdfParse = require('pdf-parse');
 const { renderizarPrimeraPagina } = require('./pdf');
 const { parsearComprobante } = require('./parser');
+const { extraerJSON } = require('./json');
 
 // Perezoso: creado al importar, el modulo revienta si falta la key antes de que
 // index.js llegue a avisar cual falta.
@@ -141,9 +142,9 @@ async function pedirVision(imageBuffer, mimeType) {
   });
 
   const responseText = result.choices[0]?.message?.content || '';
-  const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw new Error('No se obtuvo JSON válido');
-  return JSON.parse(jsonMatch[0]);
+  const datos = extraerJSON(responseText);
+  if (!datos) throw new Error('No se obtuvo JSON válido');
+  return datos;
 }
 
 async function extractWithText(text) {
@@ -164,9 +165,9 @@ async function pedirTexto(text) {
   });
 
   const responseText = result.choices[0]?.message?.content || '';
-  const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw new Error('No se obtuvo JSON válido');
-  return JSON.parse(jsonMatch[0]);
+  const datos = extraerJSON(responseText);
+  if (!datos) throw new Error('No se obtuvo JSON válido');
+  return datos;
 }
 
 async function extractData(imageBuffer, mimeType) {
@@ -191,14 +192,22 @@ async function extractData(imageBuffer, mimeType) {
     // El PDF es una imagen. Renderizamos la pagina y la mandamos a vision:
     // es lo unico que funciona cuando la imagen viene comprimida adentro.
     console.log('PDF sin texto, renderizando la página...');
+
+    // El catch cubre solo el renderizado: si tambien envolviera la llamada al
+    // modelo, un fallo de la IA se reportaria como "no se pudo renderizar" y
+    // manda a buscar el problema al lugar equivocado.
+    let render = null;
     try {
-      const render = await renderizarPrimeraPagina(imageBuffer);
+      render = await renderizarPrimeraPagina(imageBuffer);
+    } catch (err) {
+      console.error('No se pudo renderizar el PDF:', err.message);
+    }
+
+    if (render) {
       if (render.paginas > 1) {
         console.log(`El PDF tiene ${render.paginas} páginas, se usa la primera`);
       }
       return await extractWithVision(render.buffer, render.mime);
-    } catch (err) {
-      console.error('No se pudo renderizar el PDF:', err.message);
     }
 
     // Ultimo recurso para los PDFs que si traen un JPEG o PNG sin comprimir.
