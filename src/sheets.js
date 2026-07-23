@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const { google } = require('googleapis');
+const { aNumero } = require('./parser');
 
 const SHEET_NAME = 'Hoja 1';
 const HOJA_ERRORES = 'Errores';
@@ -144,9 +145,12 @@ function normalizar(valor) {
   return String(valor ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
+// Misma lectura que el resto: si el monto llega formateado, "66.842" tiene que
+// dar sesenta y seis mil, no sesenta y seis. Si la clave se armara con el valor
+// mal leido, el mismo comprobante daria claves distintas segun como llegue.
 function normalizarMonto(monto) {
-  const numero = Number(monto);
-  return Number.isFinite(numero) ? numero.toFixed(2) : normalizar(monto);
+  const numero = aNumero(monto);
+  return numero === null ? normalizar(monto) : numero.toFixed(2);
 }
 
 // Dos comprobantes son el mismo si comparten referencia y monto. Muchos

@@ -27,25 +27,34 @@ function limpiar(texto) {
   return String(texto || '').replace(/\s+/g, ' ').trim();
 }
 
-// "$ 5.200,00" -> 5200.00 . El formato argentino usa punto de miles y coma
-// decimal, al reves que el ingles.
+// "$ 5.200,00" -> 5200 . El punto y la coma cambian de rol segun de donde
+// venga el valor: el formato argentino usa punto de miles y coma decimal, el
+// yanqui al reves, y Google Sheets devuelve las celdas ya formateadas segun la
+// configuracion regional de la planilla.
+//
+// No se puede decidir por el simbolo, entonces se decide por cuantos digitos
+// quedan despues del ultimo separador: tres son miles (66.842 son sesenta y
+// seis mil), uno o dos son centavos (66.84 son sesenta y seis con ochenta y
+// cuatro). Los pesos no llevan tres decimales, asi que la regla no es ambigua.
 function aNumero(crudo) {
-  if (!crudo) return null;
+  if (crudo === null || crudo === undefined || crudo === '') return null;
+
+  // Un numero de verdad no necesita interpretacion.
+  if (typeof crudo === 'number') {
+    return Number.isFinite(crudo) && crudo > 0 ? crudo : null;
+  }
 
   let texto = String(crudo).replace(/[^\d.,-]/g, '');
   if (!texto) return null;
 
-  const ultimaComa = texto.lastIndexOf(',');
-  const ultimoPunto = texto.lastIndexOf('.');
+  const ultimoSeparador = /[.,](\d+)$/.exec(texto);
 
-  if (ultimaComa > ultimoPunto) {
-    // Coma decimal: 5.200,00
-    texto = texto.replace(/\./g, '').replace(',', '.');
-  } else if (ultimoPunto > ultimaComa) {
-    // Punto decimal solo si deja 1 o 2 decimales; si no son miles: 5.200
-    const decimales = texto.length - ultimoPunto - 1;
-    texto = decimales <= 2 ? texto.replace(/,/g, '') : texto.replace(/[.,]/g, '');
+  if (ultimoSeparador && ultimoSeparador[1].length <= 2) {
+    // El ultimo separador son centavos; los anteriores son de miles.
+    const corte = texto.length - ultimoSeparador[1].length - 1;
+    texto = `${texto.slice(0, corte).replace(/[.,]/g, '')}.${ultimoSeparador[1]}`;
   } else {
+    // Tres digitos o mas: todos los separadores son de miles.
     texto = texto.replace(/[.,]/g, '');
   }
 
@@ -92,13 +101,20 @@ function buscarFecha(texto) {
 function buscarMonto(texto) {
   const plano = sinAcentos(texto);
 
+  // Todas exigen el signo $ pegado al numero. Sin eso, en un PDF de dos
+  // columnas la etiqueta "Importe" cruzaba el salto de linea y se llevaba el
+  // "12" de "12:22 PM" como si fuera el monto.
+  //
+  // El orden importa: lo que se concilia es lo que llega a la cuenta, asi que
+  // el importe transferido gana sobre el total, que incluye comisiones.
   const etiquetas = [
-    /monto\s*(?:debitado|transferido|de la transferencia|enviado|total)?\s*[:\s]*\$?\s*([\d.,]+)/i,
-    /importe\s*(?:total|enviado|transferido)?\s*[:\s]*\$?\s*([\d.,]+)/i,
-    /dinero\s+enviado\s*[:\s]*\$?\s*([\d.,]+)/i,
-    /total\s*(?:transferido|enviado)?\s*[:\s]*\$?\s*([\d.,]+)/i,
-    /valor\s*[:\s]*\$?\s*([\d.,]+)/i,
-    /(?:transferiste|enviaste|pagaste)\s*\$?\s*([\d.,]+)/i,
+    /importe\s+a\s+transferir\s*[:\s]*\$\s*([\d.,]+)/i,
+    /monto\s*(?:debitado|transferido|de la transferencia|enviado)?\s*[:\s]*\$\s*([\d.,]+)/i,
+    /importe\s*(?:enviado|transferido)?\s*[:\s]*\$\s*([\d.,]+)/i,
+    /dinero\s+enviado\s*[:\s]*\$\s*([\d.,]+)/i,
+    /total\s*(?:transferido|enviado)?\s*[:\s]*\$\s*([\d.,]+)/i,
+    /valor\s*[:\s]*\$\s*([\d.,]+)/i,
+    /(?:transferiste|enviaste|pagaste)\s*\$\s*([\d.,]+)/i,
   ];
 
   for (const patron of etiquetas) {
@@ -231,6 +247,12 @@ function buscarReferencia(texto) {
   if (!valor) return null;
 
   const limpio = valor.replace(/[^\w-]/g, '');
+
+  // En un PDF de dos columnas la etiqueta "Referencia" puede quedar pegada al
+  // CBU de destino. Un CBU o CVU son 22 digitos y nunca es un numero de
+  // operacion.
+  if (/^\d{22}$/.test(limpio)) return null;
+
   // Descarta capturas basura tipo "de transferencia".
   return /\d/.test(limpio) && limpio.length >= 4 ? limpio : null;
 }

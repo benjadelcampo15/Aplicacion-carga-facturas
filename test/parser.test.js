@@ -11,6 +11,8 @@ function igual(nombre, obtenido, esperado) {
 }
 
 // --- Conversion de importes ---
+// El punto y la coma cambian de rol segun de donde venga el valor, asi que se
+// decide por cuantos digitos quedan detras: tres son miles, dos son centavos.
 igual('monto con miles y decimales', aNumero('$ 5.200,00'), 5200);
 igual('monto pegado al signo', aNumero('$45.000,50'), 45000.5);
 igual('monto sin decimales', aNumero('$768.347'), 768347);
@@ -19,6 +21,23 @@ igual('monto de millones', aNumero('$375.139,61'), 375139.61);
 igual('monto simple', aNumero('5200'), 5200);
 igual('texto sin numero', aNumero('sin monto'), null);
 igual('monto en cero se descarta', aNumero('$0,00'), null);
+
+// El bug que aparecio en produccion: sesenta y seis mil se leia como sesenta y
+// seis, porque Google devuelve la celda formateada y el punto parecia decimal.
+igual('miles con punto, sin decimales', aNumero('66.842'), 66842);
+igual('miles con coma, sin decimales', aNumero('66,842'), 66842);
+igual('formato argentino completo', aNumero('$66.842,00'), 66842);
+igual('formato yanqui completo', aNumero('$263,485.00'), 263485);
+igual('millones con dos separadores', aNumero('1.234.567'), 1234567);
+igual('millones con separadores yanquis', aNumero('1,234,567'), 1234567);
+igual('millones con decimales', aNumero('1.234.567,89'), 1234567.89);
+// Dos digitos detras si son centavos: sesenta y seis pesos con ochenta y cuatro.
+igual('centavos con punto', aNumero('66.84'), 66.84);
+igual('centavos con coma', aNumero('66,84'), 66.84);
+igual('un solo decimal', aNumero('66842.5'), 66842.5);
+// Un numero ya convertido no se toca.
+igual('numero de verdad', aNumero(66842), 66842);
+igual('numero con decimales', aNumero(66842.5), 66842.5);
 
 // --- Fechas ---
 igual('fecha con barras', buscarFecha('Fecha 18/05/2026'), '2026-05-18');
@@ -135,6 +154,55 @@ const noCentavos = parsearComprobante(
   'Importe $ 3.000\n2026\nFecha 01/02/2026\nOrdenante\nAna Gomez',
 );
 igual('no toma cualquier numero de abajo como centavos', noCentavos?.monto, 3000);
+
+// --- Banco Macro, texto real de un PDF que llego por WhatsApp ---
+// El PDF tiene dos columnas y al extraer el texto las etiquetas quedan lejos de
+// sus valores. Ademas usa formato de miles yanqui: coma de miles, punto decimal.
+const macro = `Transferencia a terceros Otro Banco
+CBU/CVU destino
+Banco
+Número de Operación
+Fecha y hora
+Datos de la Operación
+Cuenta origen
+Importe
+12:22 PM 22/07/2026
+260961266
+$ 263,485.00
+CC $ 340409424532951
+CUIT / CUIL
+Titular de la cuenta
+30707873678
+SWITCH COMPANY SA
+Tipo de cuenta
+Es una cuenta corriente no propia
+EjecuciónInmediata
+ConceptoFacturas
+Referencia
+0720441220000000482990
+86377386Nro. de Referencia
+Banco Macro S.A.
+Ordenante
+JEM DISTRIBUIDORA SAS
+CUIT/CUIL 33718908359
+IMPORTE A TRANSFERIR$ 263,485.00
+COMISION$ 15.00
+I.V.A. DEBITO FISCAL$ 3.15
+S.E.U.O
+Importe total$ 263,503.15`;
+
+const mc = parsearComprobante(macro);
+check('Macro: lo parsea', mc !== null);
+// La etiqueta "Importe" quedaba sobre "12:22 PM" y se llevaba el 12 como monto.
+igual('Macro: no toma la hora como monto', mc?.monto, 263485);
+// Lo que se concilia es lo que llega, no lo que se debita con comisiones.
+check('Macro: no toma el total con comisiones', mc?.monto !== 263503.15);
+igual('Macro: formato de miles yanqui', mc?.monto, 263485);
+igual('Macro: fecha', mc?.fecha, '2026-07-22');
+igual('Macro: ordenante', mc?.nombre_origen, 'JEM DISTRIBUIDORA SAS');
+igual('Macro: banco', mc?.banco_origen, 'Macro');
+// "Referencia" quedaba pegada al CBU de destino.
+check('Macro: no toma el CBU como referencia', mc?.referencia !== '0720441220000000482990');
 
 // --- Mercado Pago ---
 const mp = `
