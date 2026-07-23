@@ -125,11 +125,15 @@ igual('Supervielle: banco', sv?.banco_origen, 'Supervielle');
 igual('Supervielle: numero de control como referencia', sv?.referencia, '2022');
 
 // Sin esto "$ 5.200" con "50" abajo se leia como 5200 y se perdian los centavos.
-const centavos = parsearComprobante('Dinero enviado\n$ 5.200\n50\n22/07/26');
+const centavos = parsearComprobante(
+  'Dinero enviado\n$ 5.200\n50\n22/07/26\nOrdenante\nAna Gomez',
+);
 igual('centavos sueltos en otro monto', centavos?.monto, 5200.5);
 
 // Un numero suelto abajo que no son centavos no tiene que pegarse al monto.
-const noCentavos = parsearComprobante('Importe $ 3.000\n2026\nFecha 01/02/2026');
+const noCentavos = parsearComprobante(
+  'Importe $ 3.000\n2026\nFecha 01/02/2026\nOrdenante\nAna Gomez',
+);
 igual('no toma cualquier numero de abajo como centavos', noCentavos?.monto, 3000);
 
 // --- Mercado Pago ---
@@ -161,6 +165,51 @@ check('texto corto se rinde', parsearComprobante('hola') === null);
 check('null se rinde', parsearComprobante(null) === null);
 check('texto que no es comprobante se rinde',
   parsearComprobante('Estimado cliente, le informamos que su resumen esta disponible.') === null);
+
+// --- Controles de plausibilidad ---
+// Estos casos salieron de comprobantes que el parser "leyo" con exito pero
+// devolviendo basura. Escribir un importe equivocado en la planilla es peor
+// que gastar una llamada al modelo, asi que ahora se rinde.
+
+check('un CBU leido como importe se rechaza',
+  parsearComprobante('Transferencia\nImporte $ 32404780011607\nFecha 09/05/2019') === null);
+check('un CUIT leido como importe se rechaza',
+  parsearComprobante('Transferencia\nMonto 20262394914\nFecha 22/07/2026') === null);
+check('un numero suelto minusculo se rechaza',
+  parsearComprobante('Transferencia\nMonto 12\nFecha 22/07/2026') === null);
+check('un monto en cero se rechaza',
+  parsearComprobante('Transferencia\nImporte $ 0,00\nFecha 22/07/2026') === null);
+
+// Cuando lo dudoso es un campo suelto pero el comprobante se identifica por
+// otro lado, se acepta con ese campo vacio: el monto y la fecha son confiables,
+// el resto no vale inventarlo.
+const BASE = 'Transferencia\nImporte $ 15.000,00\nFecha 22/07/2026\nNumero de operacion\n998877\n';
+
+const conEtiqueta = parsearComprobante(`${BASE}Origen\nCuenta Destino:`);
+check('un comprobante con un campo dudoso igual se acepta', conEtiqueta !== null);
+igual('una etiqueta suelta no pasa como nombre', conEtiqueta?.nombre_origen, null);
+
+const conCuenta = parsearComprobante(`${BASE}Ordenante\n076-359085/8`);
+igual('un numero de cuenta no pasa como nombre', conCuenta?.nombre_origen, null);
+
+const conceptoEtiqueta = parsearComprobante(`${BASE}Concepto\nReferencia:`);
+igual('una etiqueta suelta no pasa como concepto', conceptoEtiqueta?.concepto, null);
+
+// Sin nombre ni referencia la fila no sirve para conciliar y la clave de
+// duplicados queda solo en fecha+monto, que pisaria pagos distintos.
+check('sin nombre ni referencia se rinde',
+  parsearComprobante('Transferencia\nImporte $ 100.000,00\nFecha 16/05/2023\nConcepto\nVarios') === null);
+check('con nombre solo, alcanza',
+  parsearComprobante('Transferencia\nImporte $ 100.000,00\nFecha 16/05/2023\nOrdenante\nAna Gomez') !== null);
+check('con referencia sola, alcanza',
+  parsearComprobante('Transferencia\nImporte $ 100.000,00\nFecha 16/05/2023\nNumero de operacion\n998877') !== null);
+
+// Los comprobantes buenos no tienen que verse afectados por los controles.
+igual('el nombre de verdad sigue pasando', sv?.nombre_origen, 'Cristian Alberto Mercado Maiquez');
+igual('el monto de verdad sigue pasando', sv?.monto, 107467);
+igual('un nombre con numero de sociedad pasa',
+  parsearComprobante('Transferencia\nImporte $ 15.000,00\nFecha 22/07/2026\nOrdenante\nJEM DISTRIBUIDORA SAS')?.nombre_origen,
+  'JEM DISTRIBUIDORA SAS');
 
 // Marca su origen, para poder distinguir en el Sheet que salio del parser.
 igual('marca la fuente', u?._fuente, 'parser');

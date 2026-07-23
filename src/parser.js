@@ -249,26 +249,78 @@ function buscarTipo(texto) {
   return 'otro';
 }
 
+// Un CBU son 22 digitos y un CUIT 11: leidos como importe dan cifras absurdas.
+// Ningun comprobante de los que pasan por acá llega a mil millones de pesos.
+const MONTO_MAXIMO = 1e9;
+
+// Piso para no confiar en numeros sueltos que quedaron cerca de una etiqueta.
+// Una transferencia de menos de cien pesos no existe en la practica, asi que un
+// valor asi es casi siempre un numero mal leido. Si alguna vez pasa de verdad,
+// el comprobante lo resuelve el modelo.
+const MONTO_MINIMO = 100;
+
+// Etiquetas que el extractor de texto a veces deja como si fueran el valor,
+// cuando el dato real quedo en otra parte del PDF.
+const PARECE_ETIQUETA = /^(cuenta|banco|titular|cbu|cvu|cuit|cuil|alias|referencia|concepto|motivo|importe|monto|fecha|destino|origen|destinatario|beneficiario|n[°ºo]|numero)\b/i;
+
+function nombrePlausible(valor) {
+  if (!valor) return null;
+  // "Cuenta Destino:" es una etiqueta que quedo suelta, no un nombre.
+  if (valor.endsWith(':')) return null;
+  if (PARECE_ETIQUETA.test(valor)) return null;
+  // "076-359085/8" es un numero de cuenta, no el nombre de nadie.
+  if (!/[a-zA-ZáéíóúÁÉÍÓÚñÑ]{3}/.test(valor)) return null;
+  // Un nombre no es mayormente digitos.
+  if ((valor.replace(/\D/g, '').length / valor.length) > 0.4) return null;
+  return valor;
+}
+
+function montoPlausible(monto) {
+  if (!monto || monto < MONTO_MINIMO) return null;
+  if (monto >= MONTO_MAXIMO) return null;
+  return monto;
+}
+
+function textoPlausible(valor) {
+  if (!valor) return null;
+  if (valor.endsWith(':')) return null;
+  if (PARECE_ETIQUETA.test(valor)) return null;
+  return valor;
+}
+
 // Devuelve los mismos campos que el modelo, o null si no hay confianza. Monto y
 // fecha son obligatorios: sin alguno de los dos no se puede conciliar ni
 // deduplicar, y adivinar seria peor que pasarle el trabajo a la IA.
+//
+// Los campos que no pasan los controles se devuelven vacios en vez de con un
+// dato dudoso; si lo que falla es el monto, se descarta el comprobante entero y
+// lo resuelve el modelo. Escribir un importe equivocado en la planilla es mucho
+// peor que gastar una llamada.
 function parsearComprobante(texto) {
   const crudo = String(texto || '');
   if (crudo.trim().length < 20) return null;
 
-  const monto = buscarMonto(crudo);
+  const monto = montoPlausible(buscarMonto(crudo));
   const fecha = buscarFecha(crudo);
   if (!monto || !fecha) return null;
+
+  const nombre_origen = nombrePlausible(buscarNombreOrigen(crudo));
+  const referencia = buscarReferencia(crudo);
+
+  // Sin nombre ni referencia la fila no sirve para conciliar, y la clave de
+  // duplicados queda solo en fecha+monto: dos personas distintas transfiriendo
+  // lo mismo el mismo dia se pisarian. Mejor que lo intente el modelo.
+  if (!nombre_origen && !referencia) return null;
 
   return {
     monto,
     fecha,
     tipo_operacion: buscarTipo(crudo),
-    nombre_origen: buscarNombreOrigen(crudo),
+    nombre_origen,
     cbu_origen: buscarCbuOrigen(crudo),
     banco_origen: buscarBanco(crudo),
-    referencia: buscarReferencia(crudo),
-    concepto: buscarConcepto(crudo),
+    referencia,
+    concepto: textoPlausible(buscarConcepto(crudo)),
     _fuente: 'parser',
   };
 }
