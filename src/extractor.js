@@ -55,6 +55,26 @@ function extractImageFromPdf(pdfBuffer) {
   return null;
 }
 
+// qwen3.6 razona antes de contestar. Con un comprobante cargado de campos ese
+// razonamiento pasaba los 1024 tokens y la respuesta se cortaba antes del JSON,
+// asi que fallaba siempre igual por mas que se reintentara.
+//
+// Sobre un comprobante real, razonando gasta 1275 tokens de salida y sin razonar
+// 116, con datos identicos. Se pide primero sin razonar: es diez veces mas
+// barato en cuota, que es lo que limita cuantos comprobantes entran por minuto.
+// Si eso sale incompleto se reintenta razonando, para no perder los dificiles.
+const SIN_RAZONAR = {
+  reasoning_effort: 'none',
+  response_format: { type: 'json_object' },
+  max_tokens: 1024,
+};
+
+const RAZONANDO = {
+  reasoning_format: 'hidden',
+  response_format: { type: 'json_object' },
+  max_tokens: 4096,
+};
+
 const INTENTOS = 4;
 const ESPERA_POR_DEFECTO_MS = 20000;
 const ESPERA_MAXIMA_MS = 90000;
@@ -114,11 +134,27 @@ async function conReintentos(descripcion, fn, { esperar = dormir } = {}) {
   throw ultimo;
 }
 
-async function extractWithVision(imageBuffer, mimeType) {
-  return conReintentos('vision', () => pedirVision(imageBuffer, mimeType));
+// Sin monto o sin fecha no se puede ni conciliar ni deduplicar, asi que vale la
+// pena gastar una segunda llamada razonando antes de darlo por perdido.
+function estaCompleto(datos) {
+  return Boolean(datos && (datos.error || (datos.monto && datos.fecha)));
 }
 
-async function pedirVision(imageBuffer, mimeType) {
+async function extractWithVision(imageBuffer, mimeType) {
+  const rapido = await conReintentos(
+    'vision', () => pedirVision(imageBuffer, mimeType, SIN_RAZONAR),
+  ).catch((err) => {
+    console.log(`vision: sin razonar no salió (${err.message})`);
+    return null;
+  });
+
+  if (estaCompleto(rapido)) return rapido;
+
+  console.log('vision: reintentando con razonamiento...');
+  return conReintentos('vision razonando', () => pedirVision(imageBuffer, mimeType, RAZONANDO));
+}
+
+async function pedirVision(imageBuffer, mimeType, opciones) {
   const base64Image = imageBuffer.toString('base64');
 
   const result = await groq().chat.completions.create({
@@ -138,7 +174,7 @@ async function pedirVision(imageBuffer, mimeType) {
       },
     ],
     temperature: 0,
-    max_tokens: 1024,
+    ...opciones,
   });
 
   const responseText = result.choices[0]?.message?.content || '';
@@ -161,6 +197,8 @@ async function pedirTexto(text) {
       },
     ],
     temperature: 0,
+    // llama no razona, asi que solo hace falta forzarle el JSON.
+    response_format: { type: 'json_object' },
     max_tokens: 1024,
   });
 
@@ -224,4 +262,10 @@ async function extractData(imageBuffer, mimeType) {
   return await extractWithVision(imageBuffer, mimeType);
 }
 
-module.exports = { extractData, esperaTrasRateLimit, esReintentable, conReintentos };
+module.exports = {
+  extractData,
+  esperaTrasRateLimit,
+  esReintentable,
+  conReintentos,
+  EXTRACTION_PROMPT,
+};
