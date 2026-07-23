@@ -95,6 +95,7 @@ function buscarMonto(texto) {
   const etiquetas = [
     /monto\s*(?:debitado|transferido|de la transferencia|enviado|total)?\s*[:\s]*\$?\s*([\d.,]+)/i,
     /importe\s*(?:total|enviado|transferido)?\s*[:\s]*\$?\s*([\d.,]+)/i,
+    /dinero\s+enviado\s*[:\s]*\$?\s*([\d.,]+)/i,
     /total\s*(?:transferido|enviado)?\s*[:\s]*\$?\s*([\d.,]+)/i,
     /valor\s*[:\s]*\$?\s*([\d.,]+)/i,
     /(?:transferiste|enviaste|pagaste)\s*\$?\s*([\d.,]+)/i,
@@ -103,15 +104,31 @@ function buscarMonto(texto) {
   for (const patron of etiquetas) {
     const match = patron.exec(plano);
     const monto = match && aNumero(match[1]);
-    if (monto) return monto;
+    if (monto) return conCentavosSueltos(plano, match, monto);
   }
 
   // Sin etiqueta: el importe mas grande con formato de pesos.
   const sueltos = [...plano.matchAll(/(?:\$|ARS)\s*([\d.]+,\d{2}|[\d.,]+)/g)]
-    .map((m) => aNumero(m[1]))
+    .map((m) => {
+      const monto = aNumero(m[1]);
+      return monto ? conCentavosSueltos(plano, m, monto) : null;
+    })
     .filter(Boolean);
 
   return sueltos.length ? Math.max(...sueltos) : null;
+}
+
+// Varios comprobantes muestran los centavos en chico, y al extraer el texto
+// caen en la linea de abajo:  "$ 107.467" / "00". Sin esto, "$ 5.200" / "50"
+// se leeria como 5200 en vez de 5200,50.
+function conCentavosSueltos(texto, match, monto) {
+  if (!Number.isInteger(monto)) return monto;
+
+  const finDelMatch = match.index + match[0].length;
+  const siguiente = /^\s*\n\s*(\d{2})\s*(?:\n|$)/.exec(texto.slice(finDelMatch));
+  if (!siguiente) return monto;
+
+  return Number(`${monto}.${siguiente[1]}`);
 }
 
 // Desde el arranque de la linea donde cae una posicion. Acotar el contexto a la
@@ -203,6 +220,8 @@ function buscarReferencia(texto) {
     'c[oó]digo\\s+de\\s+(?:operaci[oó]n|transferencia)',
     'n[°ºo]?\\s*de\\s*comprobante',
     'comprobante\\s*n[°ºo]?',
+    'n[uú]mero\\s+de\\s+control',
+    'n[°ºo]?\\s*de\\s*control',
     'referencia',
     'identificador',
     'transacci[oó]n',

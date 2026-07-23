@@ -84,6 +84,54 @@ igual('Santander: CBU de origen, no el de destino',
   s?.cbu_origen, '0720441220000000482990');
 igual('Santander: referencia', s?.referencia, '4242795675');
 
+// --- Supervielle, texto real extraido de un PDF que llego por WhatsApp ---
+// Los centavos caen en la linea de abajo porque en el comprobante van en chico.
+const supervielle = `SUPERVIELLE
+Transferencia a otra cuenta
+Dinero enviado
+$ 107.467
+00
+22/07/26 • 10:37 hs
+Cuenta origen
+Cristian Alberto Mercado Maiquez
+Supervielle
+CUIT / CUIL
+20-26239491-4
+CBU / CVU
+0270067020055728930029
+Cuenta destino
+Switch Company Sa
+Santander
+CUIT / CUIL
+30-70787367-8
+CBU / CVU
+0720441220000000482990
+Información de la operación
+Número de control
+2022
+Sujeto a comisiones determinadas por el Banco
+Supervielle.
+S.E.U.O.`;
+
+const sv = parsearComprobante(supervielle);
+check('Supervielle: lo parsea', sv !== null);
+igual('Supervielle: junta los centavos de la linea de abajo', sv?.monto, 107467.00);
+igual('Supervielle: fecha de dos digitos', sv?.fecha, '2026-07-22');
+igual('Supervielle: titular de la cuenta origen',
+  sv?.nombre_origen, 'Cristian Alberto Mercado Maiquez');
+igual('Supervielle: CBU de origen, no el de destino',
+  sv?.cbu_origen, '0270067020055728930029');
+igual('Supervielle: banco', sv?.banco_origen, 'Supervielle');
+igual('Supervielle: numero de control como referencia', sv?.referencia, '2022');
+
+// Sin esto "$ 5.200" con "50" abajo se leia como 5200 y se perdian los centavos.
+const centavos = parsearComprobante('Dinero enviado\n$ 5.200\n50\n22/07/26');
+igual('centavos sueltos en otro monto', centavos?.monto, 5200.5);
+
+// Un numero suelto abajo que no son centavos no tiene que pegarse al monto.
+const noCentavos = parsearComprobante('Importe $ 3.000\n2026\nFecha 01/02/2026');
+igual('no toma cualquier numero de abajo como centavos', noCentavos?.monto, 3000);
+
 // --- Mercado Pago ---
 const mp = `
 Mercado Pago
