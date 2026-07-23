@@ -9,14 +9,14 @@ require('dotenv').config();
 
 const { spawn } = require('child_process');
 
-const VARIABLES = ['GOOGLE_SHEETS_ID', 'GOOGLE_SERVICE_ACCOUNT_EMAIL', 'GOOGLE_PRIVATE_KEY', 'GROQ_API_KEY'];
+const VARIABLES = ['GOOGLE_SHEETS_ID', 'GOOGLE_SERVICE_ACCOUNT_EMAIL', 'GOOGLE_PRIVATE_KEY', 'GEMINI_API_KEY'];
 
 // Valores de relleno del .env.example: si alguno llega a Railway, el servicio
 // arranca roto y el error no dice que la variable es de mentira.
 const PLACEHOLDERS = [
   'id_del_google_sheet',
   'tu_key_aqui',
-  'tu_api_key_de_groq',
+  'tu_api_key_de_gemini',
   'tu_service_account@proyecto.iam.gserviceaccount.com',
 ];
 

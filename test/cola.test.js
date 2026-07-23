@@ -8,12 +8,23 @@ function check(nombre, ok) {
 
 const dormir = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Copia del error real que tiro Groq cuando el cliente mando el lote.
+// Error 429 estilo Groq: el tiempo de espera venia en la cabecera retry-after.
+// Se mantiene por compatibilidad de la funcion que lo lee.
 function error429(retryAfter) {
   const err = new Error('Rate limit reached for model `qwen/qwen3.6-27b` ... '
     + 'Please try again in 26.4825s. Need more tokens?');
   err.status = 429;
   err.headers = retryAfter === undefined ? {} : { 'retry-after': String(retryAfter) };
+  return err;
+}
+
+// Error 429 como lo tira Gemini: el detalle trae "retryDelay":"34s".
+function error429Gemini(segundos) {
+  const err = new Error(
+    '{"error":{"code":429,"status":"RESOURCE_EXHAUSTED",'
+    + `"details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"${segundos}s"}]}}`,
+  );
+  err.status = 429;
   return err;
 }
 
@@ -64,10 +75,11 @@ async function main() {
     corridas.join(',') === 'a,b' && cola2.largo === 0);
 
   // --- Lectura del rate limit ---
-  check('usa la cabecera retry-after', esperaTrasRateLimit(error429(27)) === 28000);
+  check('lee el retryDelay de Gemini', esperaTrasRateLimit(error429Gemini(34)) === 35000);
+  check('usa la cabecera retry-after de Groq', esperaTrasRateLimit(error429(27)) === 28000);
   check('si no hay cabecera lee el texto del error',
     esperaTrasRateLimit(error429(undefined)) === 27482.5);
-  check('recorta esperas absurdas', esperaTrasRateLimit(error429(600)) === 90000);
+  check('recorta esperas absurdas', esperaTrasRateLimit(error429Gemini(600)) === 90000);
   check('un error que no es 429 no genera espera',
     esperaTrasRateLimit(Object.assign(new Error('otra cosa'), { status: 400 })) === null);
 

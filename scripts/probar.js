@@ -68,8 +68,8 @@ async function main() {
     process.exit(1);
   }
 
-  if (usarIA && !process.env.GROQ_API_KEY) {
-    console.log('\nFalta GROQ_API_KEY para usar --ia\n');
+  if (usarIA && !process.env.GEMINI_API_KEY && !process.env.GOOGLE_API_KEY) {
+    console.log('\nFalta GEMINI_API_KEY para usar --ia\n');
     process.exit(1);
   }
 

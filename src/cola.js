@@ -1,6 +1,6 @@
-// Los comprobantes se procesan de a uno. Groq permite ~8000 tokens por minuto
-// y cada imagen consume ~3700, asi que atender varios en paralelo garantiza
-// chocar contra el limite y perder comprobantes.
+// Los comprobantes se procesan de a uno. El plan gratis de Gemini limita las
+// requests por minuto, asi que atender varios en paralelo cuando entra un lote
+// choca contra ese tope; en serie se espera el rate limit y no se pierde nada.
 function crearCola() {
   const pendientes = [];
   let trabajando = false;

@@ -268,7 +268,7 @@ function dashboard(appState, stats, error, errores = []) {
       <div class="card ${appState.enCola ? 'pend' : ''}">
         <div class="label">En cola</div>
         <div class="value">${appState.enCola || 0}</div>
-        ${appState.enCola ? '<div class="sub">esperando a Groq</div>' : ''}
+        ${appState.enCola ? '<div class="sub">esperando al modelo</div>' : ''}
       </div>
     </div>
 
