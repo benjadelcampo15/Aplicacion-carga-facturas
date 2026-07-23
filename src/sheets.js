@@ -6,8 +6,10 @@ const SHEET_NAME = 'Hoja 1';
 const HOJA_ERRORES = 'Errores';
 const HEADERS_ERRORES = ['Timestamp', 'Remitente', 'Telefono', 'Motivo', 'Archivo', 'Tipo'];
 
-// Claves ya escritas por este proceso. Cierra la ventana de carrera entre el
-// chequeo contra el Sheet y el append, cuando entran dos comprobantes juntos.
+// Claves de los comprobantes que se estan escribiendo en este instante. Solo
+// cubren la ventana del append en curso: apenas termina, manda el Sheet. Si se
+// quedaran para siempre, borrar una fila a mano no liberaria el duplicado y el
+// mismo comprobante seguiria dando "repetido" hasta reiniciar el proceso.
 const clavesEnProceso = new Set();
 
 const PEM = /-----BEGIN ([A-Z ]+)-----([\s\S]*?)-----END \1-----/;
@@ -297,9 +299,10 @@ async function appendRow(data, senderInfo) {
         values: [row],
       },
     });
-  } catch (err) {
+  } finally {
+    // Ya quedo en el Sheet (o fallo): de aca en mas el duplicado lo detecta la
+    // lectura de la columna L, no esta lista en memoria.
     clavesEnProceso.delete(clave);
-    throw err;
   }
 
   console.log('Fila agregada al Sheet:', row);
