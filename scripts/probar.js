@@ -4,6 +4,7 @@
 //   npm run probar -- "C:/ruta/comprobante.pdf"
 //   npm run probar -- carpeta-con-comprobantes
 //   npm run probar -- comprobante.pdf --texto     muestra el texto del PDF
+//   npm run probar -- comprobante.pdf --ia        llama de verdad al modelo
 require('dotenv').config();
 
 const fs = require('fs');
@@ -34,15 +35,39 @@ function mostrar(datos) {
   }
 }
 
+// Corre el mismo camino que en produccion, incluida la llamada al modelo. Sirve
+// para ver que devuelve de verdad cuando un comprobante falla.
+async function conIAReal(buffer, mimeType) {
+  const inicio = Date.now();
+  try {
+    const { extractData } = require('../src/extractor');
+    const datos = await extractData(buffer, mimeType);
+    console.log(`    \x1b[32mel modelo respondió\x1b[0m (${Date.now() - inicio} ms)`);
+    mostrar(datos);
+    return true;
+  } catch (err) {
+    console.log(`    \x1b[31mel modelo falló:\x1b[0m ${err.message}`);
+    if (err.status) console.log(`    status ${err.status}`);
+    return false;
+  }
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const verTexto = args.includes('--texto');
+  const usarIA = args.includes('--ia');
   const entrada = args.find((a) => !a.startsWith('--'));
 
   if (!entrada) {
     console.log('\nUso:  npm run probar -- "ruta/al/comprobante.pdf"');
     console.log('      npm run probar -- carpeta');
-    console.log('      npm run probar -- archivo.pdf --texto\n');
+    console.log('      npm run probar -- archivo.pdf --texto');
+    console.log('      npm run probar -- archivo.pdf --ia\n');
+    process.exit(1);
+  }
+
+  if (usarIA && !process.env.GROQ_API_KEY) {
+    console.log('\nFalta GROQ_API_KEY para usar --ia\n');
     process.exit(1);
   }
 
@@ -60,7 +85,8 @@ async function main() {
     console.log(`\x1b[1m${nombre}\x1b[0m  (${(buffer.length / 1024).toFixed(0)} KB)`);
 
     if (extension !== '.pdf') {
-      console.log('    \x1b[33mimagen -> va al modelo de visión (necesita GROQ_API_KEY)\x1b[0m');
+      console.log('    \x1b[33mimagen -> va al modelo de visión\x1b[0m');
+      if (usarIA) await conIAReal(buffer, EXTENSIONES[extension]);
       conIA++;
       console.log('');
       continue;
@@ -78,6 +104,7 @@ async function main() {
 
     if (texto.length <= 20) {
       console.log(`    \x1b[33mPDF sin texto (${texto.length} caracteres) -> se renderiza y va a visión\x1b[0m`);
+      if (usarIA) await conIAReal(buffer, 'application/pdf');
       conIA++;
       console.log('');
       continue;
