@@ -55,18 +55,7 @@ async function main() {
   check('un archivo que no existe devuelve null', inexistente === null);
 
   // --- La seccion en el dashboard ---
-  const stats = {
-    totalCargas: 0, montoTotal: 0, hoy: { cargas: 0, monto: 0 },
-    serie: [], ultimas: [], diasActivos: 0,
-    conciliacion: {
-      conciliado: { cantidad: 0, monto: 0 },
-      pendiente: { cantidad: 0, monto: 0 },
-      no_concilia: { cantidad: 0, monto: 0 },
-    },
-    conciliacionSimulada: false,
-  };
-
-  const sinErrores = dashboard(appState, stats, null, []);
+  const sinErrores = dashboard(appState, []);
   check('sin errores muestra el mensaje vacio',
     sinErrores.includes('No hay comprobantes con error'));
 
@@ -86,7 +75,7 @@ async function main() {
       disponible: false,
     },
   ];
-  const conErrores = dashboard(appState, stats, null, errores);
+  const conErrores = dashboard(appState, errores);
 
   check('lista los errores', conErrores.includes('No se pudo extraer contenido del PDF'));
   check('el disponible tiene link', conErrores.includes('href="/errores/123-abcd.pdf"'));

@@ -5,7 +5,7 @@
 //   railway run npm run check:sheets     usa las variables de Railway
 require('dotenv').config();
 
-const { validarCredenciales, leerFilas, normalizarPrivateKey } = require('../src/sheets');
+const { validarCredenciales, normalizarPrivateKey } = require('../src/sheets');
 
 function ok(texto) {
   console.log(`  OK    ${texto}`);
@@ -35,9 +35,23 @@ async function main() {
   }
 
   try {
-    const filas = await leerFilas();
-    ok(`OpenSSL acepto la clave y Google respondio`);
-    ok(`el Sheet tiene ${filas.length} filas de datos`);
+    const { google } = require('googleapis');
+    const auth = new google.auth.GoogleAuth({
+      credentials: {
+        client_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
+        private_key: normalizarPrivateKey(process.env.GOOGLE_PRIVATE_KEY),
+      },
+      scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
+    });
+    const sheets = google.sheets({ version: 'v4', auth });
+    const meta = await sheets.spreadsheets.get({ spreadsheetId: process.env.GOOGLE_SHEETS_ID });
+
+    ok('OpenSSL acepto la clave y Google respondio');
+    ok(`la planilla es "${meta.data.properties.title}"`);
+    console.log('\n  Pestañas:');
+    for (const s of meta.data.sheets) {
+      console.log(`    ${s.properties.title}`);
+    }
     console.log('\nTodo en orden.\n');
   } catch (err) {
     fallo(`Google rechazo la consulta: ${err.message}`);
@@ -50,9 +64,6 @@ async function main() {
       console.log('  Compartilo con el email de arriba como Editor.\n');
     } else if (/not found|404/i.test(err.message)) {
       console.log('\n  GOOGLE_SHEETS_ID no corresponde a ningun Sheet accesible.\n');
-    } else if (/Unable to parse range/i.test(err.message)) {
-      console.log('\n  La pestaña del Sheet no se llama "Hoja 1". Renombrala o');
-      console.log('  cambia SHEET_NAME en src/sheets.js.\n');
     } else {
       console.log('');
     }

@@ -2,8 +2,7 @@ require('dotenv').config();
 
 const { startWhatsApp } = require('./whatsapp');
 const { extractData } = require('./extractor');
-const { appendRow, buildClave, buscarDuplicado, validarCredenciales } = require('./sheets');
-const { invalidarCache } = require('./stats');
+const { appendRow, validarCredenciales } = require('./sheets');
 const { crearApp } = require('./web');
 const { crearCola } = require('./cola');
 const { guardarFallido } = require('./errores');
@@ -14,7 +13,6 @@ const appState = {
   qr: null,
   connected: false,
   processed: 0,
-  duplicados: 0,
   enCola: 0,
   fallidos: 0,
   lastError: null,
@@ -53,18 +51,10 @@ async function procesarComprobante(sock, from, imageBuffer, mimeType, senderInfo
       return;
     }
 
-    if (await buscarDuplicado(buildClave(data))) {
-      appState.duplicados++;
-      await sock.sendMessage(from, {
-        text: `Este comprobante ya estaba cargado (${data.nombre_origen} - $${data.monto}). No lo dupliqué.`,
-      });
-      console.log(`Duplicado ignorado de ${from}`);
-      return;
-    }
-
+    // Se escribe siempre; los repetidos los marca la columna CONTROL de la
+    // planilla, no el bot.
     await appendRow(data, senderInfo);
     appState.processed++;
-    invalidarCache();
 
     const summary = [
       'Comprobante registrado:',
@@ -109,6 +99,10 @@ function mensajeDeError(err) {
   if (err.message.includes('No se obtuvo JSON')) {
     return 'No pude leer los datos de esta imagen. Probá con una foto más nítida '
       + 'o una captura de pantalla.';
+  }
+  if (err.message.includes('Falta la pestaña')) {
+    return 'Recibí tu comprobante y lo guardé, pero todavía no está creada la '
+      + 'hoja de este mes en la planilla. Se va a cargar en cuanto la creen.';
   }
   return 'Hubo un error procesando el comprobante. Intentá de nuevo.';
 }
