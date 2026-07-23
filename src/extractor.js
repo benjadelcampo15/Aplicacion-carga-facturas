@@ -1,6 +1,7 @@
 const Groq = require('groq-sdk');
 const pdfParse = require('pdf-parse');
 const { renderizarPrimeraPagina } = require('./pdf');
+const { parsearComprobante } = require('./parser');
 
 // Perezoso: creado al importar, el modulo revienta si falta la key antes de que
 // index.js llegue a avisar cual falta.
@@ -174,7 +175,16 @@ async function extractData(imageBuffer, mimeType) {
     const text = (pdf.text || '').trim();
 
     if (text && text.length > 20) {
-      console.log('PDF con texto, usando extracción de texto...');
+      // El parser no gasta cuota de Groq, es instantaneo y siempre devuelve lo
+      // mismo para el mismo comprobante. Solo se cae al modelo si no logra
+      // sacar los datos con confianza.
+      const parseado = parsearComprobante(text);
+      if (parseado) {
+        console.log(`PDF con texto, extraído sin IA (monto ${parseado.monto}, ${parseado.fecha})`);
+        return parseado;
+      }
+
+      console.log('PDF con texto, el parser no alcanzó: usando el modelo...');
       return await extractWithText(text);
     }
 
