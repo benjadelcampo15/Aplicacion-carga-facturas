@@ -2,8 +2,13 @@ const { agregar } = require('../src/stats');
 const { dashboard } = require('../src/web');
 
 const checks = [];
-function check(nombre, ok) {
-  checks.push([nombre, ok]);
+function check(nombre, ok, detalle) {
+  checks.push([nombre, ok, detalle]);
+}
+
+function igual(nombre, obtenido, esperado) {
+  const ok = obtenido === esperado;
+  check(nombre, ok, ok ? '' : `obtuvo ${obtenido}, esperaba ${esperado}`);
 }
 
 const ts = (dias) => new Date(Date.now() - dias * 86400000).toISOString();
@@ -50,6 +55,29 @@ check('lee "no" como no concilia', conDato.conciliacion.no_concilia.cantidad ===
 check('lo que no reconoce queda pendiente', conDato.conciliacion.pendiente.cantidad === 1);
 check('acumula el monto por estado', conDato.conciliacion.conciliado.monto === 5000);
 
+// --- Montos formateados por Google ---
+// El Sheet devuelve las celdas segun la configuracion regional de la planilla,
+// asi que los montos llegan como texto formateado y no como numero. Leerlos mal
+// hacia que el total del dashboard quedara mil veces mas chico.
+function filaConMonto(monto) {
+  const t = ts(0);
+  return [t, t.slice(0, 10), 'transferencia', 'Alguien', monto,
+    '', '', 'ref', '', 'Benja', '549110', 'k', ''];
+}
+
+const formateados = agregar([
+  filaConMonto('66.842'),
+  filaConMonto('$66.842,00'),
+  filaConMonto('$263,485.00'),
+  filaConMonto('1.234.567'),
+  filaConMonto(66842),
+]);
+igual('suma bien los montos formateados',
+  formateados.montoTotal, 66842 + 66842 + 263485 + 1234567 + 66842);
+
+igual('el monto de hoy tambien',
+  formateados.hoy.monto, 66842 + 66842 + 263485 + 1234567 + 66842);
+
 // --- Sheet vacio ---
 const vacio = agregar([]);
 check('sheet vacio no se marca como simulado', vacio.conciliacionSimulada === false);
@@ -75,9 +103,9 @@ check('la tabla etiqueta cada carga', htmlReal.includes('class="tag si"'));
 check('el dashboard muestra la seccion', htmlSimulado.includes('Conciliación'));
 
 let fallos = 0;
-for (const [nombre, ok] of checks) {
+for (const [nombre, ok, detalle] of checks) {
   if (!ok) fallos++;
-  console.log(`${ok ? 'PASS' : 'FALLA'}  ${nombre}`);
+  console.log(`${ok ? 'PASS' : 'FALLA'}  ${nombre}${detalle ? ` -> ${detalle}` : ''}`);
 }
 console.log(`\n${checks.length - fallos}/${checks.length} pasaron`);
 process.exit(fallos ? 1 : 0);

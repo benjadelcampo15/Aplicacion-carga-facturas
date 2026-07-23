@@ -11,6 +11,8 @@ function igual(nombre, obtenido, esperado) {
 }
 
 // --- Conversion de importes ---
+// El punto y la coma cambian de rol segun de donde venga el valor, asi que se
+// decide por cuantos digitos quedan detras: tres son miles, dos son centavos.
 igual('monto con miles y decimales', aNumero('$ 5.200,00'), 5200);
 igual('monto pegado al signo', aNumero('$45.000,50'), 45000.5);
 igual('monto sin decimales', aNumero('$768.347'), 768347);
@@ -19,6 +21,23 @@ igual('monto de millones', aNumero('$375.139,61'), 375139.61);
 igual('monto simple', aNumero('5200'), 5200);
 igual('texto sin numero', aNumero('sin monto'), null);
 igual('monto en cero se descarta', aNumero('$0,00'), null);
+
+// El bug que aparecio en produccion: sesenta y seis mil se leia como sesenta y
+// seis, porque Google devuelve la celda formateada y el punto parecia decimal.
+igual('miles con punto, sin decimales', aNumero('66.842'), 66842);
+igual('miles con coma, sin decimales', aNumero('66,842'), 66842);
+igual('formato argentino completo', aNumero('$66.842,00'), 66842);
+igual('formato yanqui completo', aNumero('$263,485.00'), 263485);
+igual('millones con dos separadores', aNumero('1.234.567'), 1234567);
+igual('millones con separadores yanquis', aNumero('1,234,567'), 1234567);
+igual('millones con decimales', aNumero('1.234.567,89'), 1234567.89);
+// Dos digitos detras si son centavos: sesenta y seis pesos con ochenta y cuatro.
+igual('centavos con punto', aNumero('66.84'), 66.84);
+igual('centavos con coma', aNumero('66,84'), 66.84);
+igual('un solo decimal', aNumero('66842.5'), 66842.5);
+// Un numero ya convertido no se toca.
+igual('numero de verdad', aNumero(66842), 66842);
+igual('numero con decimales', aNumero(66842.5), 66842.5);
 
 // --- Fechas ---
 igual('fecha con barras', buscarFecha('Fecha 18/05/2026'), '2026-05-18');
@@ -84,6 +103,107 @@ igual('Santander: CBU de origen, no el de destino',
   s?.cbu_origen, '0720441220000000482990');
 igual('Santander: referencia', s?.referencia, '4242795675');
 
+// --- Supervielle, texto real extraido de un PDF que llego por WhatsApp ---
+// Los centavos caen en la linea de abajo porque en el comprobante van en chico.
+const supervielle = `SUPERVIELLE
+Transferencia a otra cuenta
+Dinero enviado
+$ 107.467
+00
+22/07/26 • 10:37 hs
+Cuenta origen
+Cristian Alberto Mercado Maiquez
+Supervielle
+CUIT / CUIL
+20-26239491-4
+CBU / CVU
+0270067020055728930029
+Cuenta destino
+Switch Company Sa
+Santander
+CUIT / CUIL
+30-70787367-8
+CBU / CVU
+0720441220000000482990
+Información de la operación
+Número de control
+2022
+Sujeto a comisiones determinadas por el Banco
+Supervielle.
+S.E.U.O.`;
+
+const sv = parsearComprobante(supervielle);
+check('Supervielle: lo parsea', sv !== null);
+igual('Supervielle: junta los centavos de la linea de abajo', sv?.monto, 107467.00);
+igual('Supervielle: fecha de dos digitos', sv?.fecha, '2026-07-22');
+igual('Supervielle: titular de la cuenta origen',
+  sv?.nombre_origen, 'Cristian Alberto Mercado Maiquez');
+igual('Supervielle: CBU de origen, no el de destino',
+  sv?.cbu_origen, '0270067020055728930029');
+igual('Supervielle: banco', sv?.banco_origen, 'Supervielle');
+igual('Supervielle: numero de control como referencia', sv?.referencia, '2022');
+
+// Sin esto "$ 5.200" con "50" abajo se leia como 5200 y se perdian los centavos.
+const centavos = parsearComprobante(
+  'Dinero enviado\n$ 5.200\n50\n22/07/26\nOrdenante\nAna Gomez',
+);
+igual('centavos sueltos en otro monto', centavos?.monto, 5200.5);
+
+// Un numero suelto abajo que no son centavos no tiene que pegarse al monto.
+const noCentavos = parsearComprobante(
+  'Importe $ 3.000\n2026\nFecha 01/02/2026\nOrdenante\nAna Gomez',
+);
+igual('no toma cualquier numero de abajo como centavos', noCentavos?.monto, 3000);
+
+// --- Banco Macro, texto real de un PDF que llego por WhatsApp ---
+// El PDF tiene dos columnas y al extraer el texto las etiquetas quedan lejos de
+// sus valores. Ademas usa formato de miles yanqui: coma de miles, punto decimal.
+const macro = `Transferencia a terceros Otro Banco
+CBU/CVU destino
+Banco
+Número de Operación
+Fecha y hora
+Datos de la Operación
+Cuenta origen
+Importe
+12:22 PM 22/07/2026
+260961266
+$ 263,485.00
+CC $ 340409424532951
+CUIT / CUIL
+Titular de la cuenta
+30707873678
+SWITCH COMPANY SA
+Tipo de cuenta
+Es una cuenta corriente no propia
+EjecuciónInmediata
+ConceptoFacturas
+Referencia
+0720441220000000482990
+86377386Nro. de Referencia
+Banco Macro S.A.
+Ordenante
+JEM DISTRIBUIDORA SAS
+CUIT/CUIL 33718908359
+IMPORTE A TRANSFERIR$ 263,485.00
+COMISION$ 15.00
+I.V.A. DEBITO FISCAL$ 3.15
+S.E.U.O
+Importe total$ 263,503.15`;
+
+const mc = parsearComprobante(macro);
+check('Macro: lo parsea', mc !== null);
+// La etiqueta "Importe" quedaba sobre "12:22 PM" y se llevaba el 12 como monto.
+igual('Macro: no toma la hora como monto', mc?.monto, 263485);
+// Lo que se concilia es lo que llega, no lo que se debita con comisiones.
+check('Macro: no toma el total con comisiones', mc?.monto !== 263503.15);
+igual('Macro: formato de miles yanqui', mc?.monto, 263485);
+igual('Macro: fecha', mc?.fecha, '2026-07-22');
+igual('Macro: ordenante', mc?.nombre_origen, 'JEM DISTRIBUIDORA SAS');
+igual('Macro: banco', mc?.banco_origen, 'Macro');
+// "Referencia" quedaba pegada al CBU de destino.
+check('Macro: no toma el CBU como referencia', mc?.referencia !== '0720441220000000482990');
+
 // --- Mercado Pago ---
 const mp = `
 Mercado Pago
@@ -113,6 +233,51 @@ check('texto corto se rinde', parsearComprobante('hola') === null);
 check('null se rinde', parsearComprobante(null) === null);
 check('texto que no es comprobante se rinde',
   parsearComprobante('Estimado cliente, le informamos que su resumen esta disponible.') === null);
+
+// --- Controles de plausibilidad ---
+// Estos casos salieron de comprobantes que el parser "leyo" con exito pero
+// devolviendo basura. Escribir un importe equivocado en la planilla es peor
+// que gastar una llamada al modelo, asi que ahora se rinde.
+
+check('un CBU leido como importe se rechaza',
+  parsearComprobante('Transferencia\nImporte $ 32404780011607\nFecha 09/05/2019') === null);
+check('un CUIT leido como importe se rechaza',
+  parsearComprobante('Transferencia\nMonto 20262394914\nFecha 22/07/2026') === null);
+check('un numero suelto minusculo se rechaza',
+  parsearComprobante('Transferencia\nMonto 12\nFecha 22/07/2026') === null);
+check('un monto en cero se rechaza',
+  parsearComprobante('Transferencia\nImporte $ 0,00\nFecha 22/07/2026') === null);
+
+// Cuando lo dudoso es un campo suelto pero el comprobante se identifica por
+// otro lado, se acepta con ese campo vacio: el monto y la fecha son confiables,
+// el resto no vale inventarlo.
+const BASE = 'Transferencia\nImporte $ 15.000,00\nFecha 22/07/2026\nNumero de operacion\n998877\n';
+
+const conEtiqueta = parsearComprobante(`${BASE}Origen\nCuenta Destino:`);
+check('un comprobante con un campo dudoso igual se acepta', conEtiqueta !== null);
+igual('una etiqueta suelta no pasa como nombre', conEtiqueta?.nombre_origen, null);
+
+const conCuenta = parsearComprobante(`${BASE}Ordenante\n076-359085/8`);
+igual('un numero de cuenta no pasa como nombre', conCuenta?.nombre_origen, null);
+
+const conceptoEtiqueta = parsearComprobante(`${BASE}Concepto\nReferencia:`);
+igual('una etiqueta suelta no pasa como concepto', conceptoEtiqueta?.concepto, null);
+
+// Sin nombre ni referencia la fila no sirve para conciliar y la clave de
+// duplicados queda solo en fecha+monto, que pisaria pagos distintos.
+check('sin nombre ni referencia se rinde',
+  parsearComprobante('Transferencia\nImporte $ 100.000,00\nFecha 16/05/2023\nConcepto\nVarios') === null);
+check('con nombre solo, alcanza',
+  parsearComprobante('Transferencia\nImporte $ 100.000,00\nFecha 16/05/2023\nOrdenante\nAna Gomez') !== null);
+check('con referencia sola, alcanza',
+  parsearComprobante('Transferencia\nImporte $ 100.000,00\nFecha 16/05/2023\nNumero de operacion\n998877') !== null);
+
+// Los comprobantes buenos no tienen que verse afectados por los controles.
+igual('el nombre de verdad sigue pasando', sv?.nombre_origen, 'Cristian Alberto Mercado Maiquez');
+igual('el monto de verdad sigue pasando', sv?.monto, 107467);
+igual('un nombre con numero de sociedad pasa',
+  parsearComprobante('Transferencia\nImporte $ 15.000,00\nFecha 22/07/2026\nOrdenante\nJEM DISTRIBUIDORA SAS')?.nombre_origen,
+  'JEM DISTRIBUIDORA SAS');
 
 // Marca su origen, para poder distinguir en el Sheet que salio del parser.
 igual('marca la fuente', u?._fuente, 'parser');

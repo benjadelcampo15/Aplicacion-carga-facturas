@@ -1,4 +1,5 @@
 const { leerFilas } = require('./sheets');
+const { aNumero } = require('./parser');
 
 const ZONA = 'America/Argentina/Buenos_Aires';
 const CACHE_MS = 30000;
@@ -26,9 +27,12 @@ function hoyLocal() {
   return new Date().toLocaleDateString('en-CA', { timeZone: ZONA });
 }
 
+// Google devuelve las celdas ya formateadas segun la configuracion regional de
+// la planilla, asi que un monto de sesenta y seis mil llega como "66.842".
+// Interpretar ese punto como decimal daba sesenta y seis pesos, y el total del
+// dashboard quedaba mil veces mas chico.
 function aMonto(valor) {
-  const numero = Number(String(valor ?? '').replace(/[^0-9.-]/g, ''));
-  return Number.isFinite(numero) ? numero : 0;
+  return aNumero(valor) || 0;
 }
 
 // Todavia no hay nada contra que conciliar: no cruzamos con extractos ni con

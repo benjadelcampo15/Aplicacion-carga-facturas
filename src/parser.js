@@ -27,25 +27,34 @@ function limpiar(texto) {
   return String(texto || '').replace(/\s+/g, ' ').trim();
 }
 
-// "$ 5.200,00" -> 5200.00 . El formato argentino usa punto de miles y coma
-// decimal, al reves que el ingles.
+// "$ 5.200,00" -> 5200 . El punto y la coma cambian de rol segun de donde
+// venga el valor: el formato argentino usa punto de miles y coma decimal, el
+// yanqui al reves, y Google Sheets devuelve las celdas ya formateadas segun la
+// configuracion regional de la planilla.
+//
+// No se puede decidir por el simbolo, entonces se decide por cuantos digitos
+// quedan despues del ultimo separador: tres son miles (66.842 son sesenta y
+// seis mil), uno o dos son centavos (66.84 son sesenta y seis con ochenta y
+// cuatro). Los pesos no llevan tres decimales, asi que la regla no es ambigua.
 function aNumero(crudo) {
-  if (!crudo) return null;
+  if (crudo === null || crudo === undefined || crudo === '') return null;
+
+  // Un numero de verdad no necesita interpretacion.
+  if (typeof crudo === 'number') {
+    return Number.isFinite(crudo) && crudo > 0 ? crudo : null;
+  }
 
   let texto = String(crudo).replace(/[^\d.,-]/g, '');
   if (!texto) return null;
 
-  const ultimaComa = texto.lastIndexOf(',');
-  const ultimoPunto = texto.lastIndexOf('.');
+  const ultimoSeparador = /[.,](\d+)$/.exec(texto);
 
-  if (ultimaComa > ultimoPunto) {
-    // Coma decimal: 5.200,00
-    texto = texto.replace(/\./g, '').replace(',', '.');
-  } else if (ultimoPunto > ultimaComa) {
-    // Punto decimal solo si deja 1 o 2 decimales; si no son miles: 5.200
-    const decimales = texto.length - ultimoPunto - 1;
-    texto = decimales <= 2 ? texto.replace(/,/g, '') : texto.replace(/[.,]/g, '');
+  if (ultimoSeparador && ultimoSeparador[1].length <= 2) {
+    // El ultimo separador son centavos; los anteriores son de miles.
+    const corte = texto.length - ultimoSeparador[1].length - 1;
+    texto = `${texto.slice(0, corte).replace(/[.,]/g, '')}.${ultimoSeparador[1]}`;
   } else {
+    // Tres digitos o mas: todos los separadores son de miles.
     texto = texto.replace(/[.,]/g, '');
   }
 
@@ -92,26 +101,50 @@ function buscarFecha(texto) {
 function buscarMonto(texto) {
   const plano = sinAcentos(texto);
 
+  // Todas exigen el signo $ pegado al numero. Sin eso, en un PDF de dos
+  // columnas la etiqueta "Importe" cruzaba el salto de linea y se llevaba el
+  // "12" de "12:22 PM" como si fuera el monto.
+  //
+  // El orden importa: lo que se concilia es lo que llega a la cuenta, asi que
+  // el importe transferido gana sobre el total, que incluye comisiones.
   const etiquetas = [
-    /monto\s*(?:debitado|transferido|de la transferencia|enviado|total)?\s*[:\s]*\$?\s*([\d.,]+)/i,
-    /importe\s*(?:total|enviado|transferido)?\s*[:\s]*\$?\s*([\d.,]+)/i,
-    /total\s*(?:transferido|enviado)?\s*[:\s]*\$?\s*([\d.,]+)/i,
-    /valor\s*[:\s]*\$?\s*([\d.,]+)/i,
-    /(?:transferiste|enviaste|pagaste)\s*\$?\s*([\d.,]+)/i,
+    /importe\s+a\s+transferir\s*[:\s]*\$\s*([\d.,]+)/i,
+    /monto\s*(?:debitado|transferido|de la transferencia|enviado)?\s*[:\s]*\$\s*([\d.,]+)/i,
+    /importe\s*(?:enviado|transferido)?\s*[:\s]*\$\s*([\d.,]+)/i,
+    /dinero\s+enviado\s*[:\s]*\$\s*([\d.,]+)/i,
+    /total\s*(?:transferido|enviado)?\s*[:\s]*\$\s*([\d.,]+)/i,
+    /valor\s*[:\s]*\$\s*([\d.,]+)/i,
+    /(?:transferiste|enviaste|pagaste)\s*\$\s*([\d.,]+)/i,
   ];
 
   for (const patron of etiquetas) {
     const match = patron.exec(plano);
     const monto = match && aNumero(match[1]);
-    if (monto) return monto;
+    if (monto) return conCentavosSueltos(plano, match, monto);
   }
 
   // Sin etiqueta: el importe mas grande con formato de pesos.
   const sueltos = [...plano.matchAll(/(?:\$|ARS)\s*([\d.]+,\d{2}|[\d.,]+)/g)]
-    .map((m) => aNumero(m[1]))
+    .map((m) => {
+      const monto = aNumero(m[1]);
+      return monto ? conCentavosSueltos(plano, m, monto) : null;
+    })
     .filter(Boolean);
 
   return sueltos.length ? Math.max(...sueltos) : null;
+}
+
+// Varios comprobantes muestran los centavos en chico, y al extraer el texto
+// caen en la linea de abajo:  "$ 107.467" / "00". Sin esto, "$ 5.200" / "50"
+// se leeria como 5200 en vez de 5200,50.
+function conCentavosSueltos(texto, match, monto) {
+  if (!Number.isInteger(monto)) return monto;
+
+  const finDelMatch = match.index + match[0].length;
+  const siguiente = /^\s*\n\s*(\d{2})\s*(?:\n|$)/.exec(texto.slice(finDelMatch));
+  if (!siguiente) return monto;
+
+  return Number(`${monto}.${siguiente[1]}`);
 }
 
 // Desde el arranque de la linea donde cae una posicion. Acotar el contexto a la
@@ -203,6 +236,8 @@ function buscarReferencia(texto) {
     'c[oó]digo\\s+de\\s+(?:operaci[oó]n|transferencia)',
     'n[°ºo]?\\s*de\\s*comprobante',
     'comprobante\\s*n[°ºo]?',
+    'n[uú]mero\\s+de\\s+control',
+    'n[°ºo]?\\s*de\\s*control',
     'referencia',
     'identificador',
     'transacci[oó]n',
@@ -212,6 +247,12 @@ function buscarReferencia(texto) {
   if (!valor) return null;
 
   const limpio = valor.replace(/[^\w-]/g, '');
+
+  // En un PDF de dos columnas la etiqueta "Referencia" puede quedar pegada al
+  // CBU de destino. Un CBU o CVU son 22 digitos y nunca es un numero de
+  // operacion.
+  if (/^\d{22}$/.test(limpio)) return null;
+
   // Descarta capturas basura tipo "de transferencia".
   return /\d/.test(limpio) && limpio.length >= 4 ? limpio : null;
 }
@@ -230,26 +271,78 @@ function buscarTipo(texto) {
   return 'otro';
 }
 
+// Un CBU son 22 digitos y un CUIT 11: leidos como importe dan cifras absurdas.
+// Ningun comprobante de los que pasan por acá llega a mil millones de pesos.
+const MONTO_MAXIMO = 1e9;
+
+// Piso para no confiar en numeros sueltos que quedaron cerca de una etiqueta.
+// Una transferencia de menos de cien pesos no existe en la practica, asi que un
+// valor asi es casi siempre un numero mal leido. Si alguna vez pasa de verdad,
+// el comprobante lo resuelve el modelo.
+const MONTO_MINIMO = 100;
+
+// Etiquetas que el extractor de texto a veces deja como si fueran el valor,
+// cuando el dato real quedo en otra parte del PDF.
+const PARECE_ETIQUETA = /^(cuenta|banco|titular|cbu|cvu|cuit|cuil|alias|referencia|concepto|motivo|importe|monto|fecha|destino|origen|destinatario|beneficiario|n[°ºo]|numero)\b/i;
+
+function nombrePlausible(valor) {
+  if (!valor) return null;
+  // "Cuenta Destino:" es una etiqueta que quedo suelta, no un nombre.
+  if (valor.endsWith(':')) return null;
+  if (PARECE_ETIQUETA.test(valor)) return null;
+  // "076-359085/8" es un numero de cuenta, no el nombre de nadie.
+  if (!/[a-zA-ZáéíóúÁÉÍÓÚñÑ]{3}/.test(valor)) return null;
+  // Un nombre no es mayormente digitos.
+  if ((valor.replace(/\D/g, '').length / valor.length) > 0.4) return null;
+  return valor;
+}
+
+function montoPlausible(monto) {
+  if (!monto || monto < MONTO_MINIMO) return null;
+  if (monto >= MONTO_MAXIMO) return null;
+  return monto;
+}
+
+function textoPlausible(valor) {
+  if (!valor) return null;
+  if (valor.endsWith(':')) return null;
+  if (PARECE_ETIQUETA.test(valor)) return null;
+  return valor;
+}
+
 // Devuelve los mismos campos que el modelo, o null si no hay confianza. Monto y
 // fecha son obligatorios: sin alguno de los dos no se puede conciliar ni
 // deduplicar, y adivinar seria peor que pasarle el trabajo a la IA.
+//
+// Los campos que no pasan los controles se devuelven vacios en vez de con un
+// dato dudoso; si lo que falla es el monto, se descarta el comprobante entero y
+// lo resuelve el modelo. Escribir un importe equivocado en la planilla es mucho
+// peor que gastar una llamada.
 function parsearComprobante(texto) {
   const crudo = String(texto || '');
   if (crudo.trim().length < 20) return null;
 
-  const monto = buscarMonto(crudo);
+  const monto = montoPlausible(buscarMonto(crudo));
   const fecha = buscarFecha(crudo);
   if (!monto || !fecha) return null;
+
+  const nombre_origen = nombrePlausible(buscarNombreOrigen(crudo));
+  const referencia = buscarReferencia(crudo);
+
+  // Sin nombre ni referencia la fila no sirve para conciliar, y la clave de
+  // duplicados queda solo en fecha+monto: dos personas distintas transfiriendo
+  // lo mismo el mismo dia se pisarian. Mejor que lo intente el modelo.
+  if (!nombre_origen && !referencia) return null;
 
   return {
     monto,
     fecha,
     tipo_operacion: buscarTipo(crudo),
-    nombre_origen: buscarNombreOrigen(crudo),
+    nombre_origen,
     cbu_origen: buscarCbuOrigen(crudo),
     banco_origen: buscarBanco(crudo),
-    referencia: buscarReferencia(crudo),
-    concepto: buscarConcepto(crudo),
+    referencia,
+    concepto: textoPlausible(buscarConcepto(crudo)),
     _fuente: 'parser',
   };
 }

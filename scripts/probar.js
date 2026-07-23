@@ -14,13 +14,15 @@ const { parsearComprobante } = require('../src/parser');
 
 const EXTENSIONES = { '.pdf': 'application/pdf', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp' };
 
-function archivosDe(entrada) {
-  if (fs.statSync(entrada).isDirectory()) {
-    return fs.readdirSync(entrada)
-      .filter((n) => EXTENSIONES[path.extname(n).toLowerCase()])
-      .map((n) => path.join(entrada, n));
-  }
-  return [entrada];
+function archivosDe(entradas) {
+  return entradas.flatMap((entrada) => {
+    if (fs.statSync(entrada).isDirectory()) {
+      return fs.readdirSync(entrada)
+        .filter((n) => EXTENSIONES[path.extname(n).toLowerCase()])
+        .map((n) => path.join(entrada, n));
+    }
+    return [entrada];
+  });
 }
 
 function mostrar(datos) {
@@ -56,9 +58,9 @@ async function main() {
   const args = process.argv.slice(2);
   const verTexto = args.includes('--texto');
   const usarIA = args.includes('--ia');
-  const entrada = args.find((a) => !a.startsWith('--'));
+  const entradas = args.filter((a) => !a.startsWith('--'));
 
-  if (!entrada) {
+  if (!entradas.length) {
     console.log('\nUso:  npm run probar -- "ruta/al/comprobante.pdf"');
     console.log('      npm run probar -- carpeta');
     console.log('      npm run probar -- archivo.pdf --texto');
@@ -71,7 +73,7 @@ async function main() {
     process.exit(1);
   }
 
-  const archivos = archivosDe(entrada);
+  const archivos = archivosDe(entradas);
   console.log(`\nProbando ${archivos.length} archivo(s)\n`);
 
   let conParser = 0;
