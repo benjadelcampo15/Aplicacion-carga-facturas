@@ -330,6 +330,8 @@ function pantallaConectando() {
     <div class="vacio">Conectando con WhatsApp...</div>`);
 }
 
+const arranque = new Date().toISOString();
+
 function crearApp(appState, control) {
   const app = express();
 
@@ -392,6 +394,12 @@ function crearApp(appState, control) {
       connected: appState.connected,
       processed: appState.processed,
       duplicados: appState.duplicados,
+      enCola: appState.enCola,
+      fallidos: appState.fallidos,
+      // Para saber que version esta corriendo sin tener que deducirlo de los
+      // logs. Railway lo inyecta solo en los deploys desde GitHub.
+      commit: (process.env.RAILWAY_GIT_COMMIT_SHA || 'desconocido').slice(0, 7),
+      arrancado: arranque,
     });
   });
 
