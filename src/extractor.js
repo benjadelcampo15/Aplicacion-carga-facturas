@@ -4,9 +4,10 @@ const { renderizarPrimeraPagina } = require('./pdf');
 const { parsearComprobante } = require('./parser');
 const { extraerJSON } = require('./json');
 
-// El plan gratuito de Gemini da 1500 requests por dia con gemini-2.5-flash, que
-// alcanza de sobra y no tiene el tope de tokens por minuto que traia problemas.
-const MODELO = 'gemini-2.5-flash';
+// gemini-3.1-flash-lite esta en el plan gratuito (1500 requests por dia), lee
+// imagenes y no tiene el tope de tokens por minuto que traia problemas. Se
+// eligio por prueba: gemini-2.5-flash da 404 para cuentas nuevas.
+const MODELO = 'gemini-3.1-flash-lite';
 
 // Perezoso: creado al importar, el modulo revienta si falta la key antes de que
 // index.js llegue a avisar cual falta.
