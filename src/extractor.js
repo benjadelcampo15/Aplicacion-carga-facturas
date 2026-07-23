@@ -1,14 +1,21 @@
-const Groq = require('groq-sdk');
+const { GoogleGenAI } = require('@google/genai');
 const pdfParse = require('pdf-parse');
 const { renderizarPrimeraPagina } = require('./pdf');
 const { parsearComprobante } = require('./parser');
 const { extraerJSON } = require('./json');
 
+// El plan gratuito de Gemini da 1500 requests por dia con gemini-2.5-flash, que
+// alcanza de sobra y no tiene el tope de tokens por minuto que traia problemas.
+const MODELO = 'gemini-2.5-flash';
+
 // Perezoso: creado al importar, el modulo revienta si falta la key antes de que
 // index.js llegue a avisar cual falta.
 let cliente = null;
-function groq() {
-  if (!cliente) cliente = new Groq({ apiKey: process.env.GROQ_API_KEY });
+function gemini() {
+  if (!cliente) {
+    const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+    cliente = new GoogleGenAI({ apiKey });
+  }
   return cliente;
 }
 
@@ -55,24 +62,23 @@ function extractImageFromPdf(pdfBuffer) {
   return null;
 }
 
-// qwen3.6 razona antes de contestar. Con un comprobante cargado de campos ese
-// razonamiento pasaba los 1024 tokens y la respuesta se cortaba antes del JSON,
-// asi que fallaba siempre igual por mas que se reintentara.
-//
-// Sobre un comprobante real, razonando gasta 1275 tokens de salida y sin razonar
-// 116, con datos identicos. Se pide primero sin razonar: es diez veces mas
-// barato en cuota, que es lo que limita cuantos comprobantes entran por minuto.
-// Si eso sale incompleto se reintenta razonando, para no perder los dificiles.
-const SIN_RAZONAR = {
-  reasoning_effort: 'none',
-  response_format: { type: 'json_object' },
-  max_tokens: 1024,
+// gemini-2.5-flash piensa antes de contestar y ese pensamiento consume tokens y
+// tiempo. thinkingBudget 0 lo apaga: para leer un comprobante alcanza y es mas
+// rapido. Si con eso sale incompleto se reintenta con pensamiento dinamico
+// (-1), que ayuda en los comprobantes mas cargados. responseMimeType obliga a
+// que la respuesta sea un JSON, sin markdown ni texto alrededor.
+const SIN_PENSAR = {
+  temperature: 0,
+  responseMimeType: 'application/json',
+  thinkingConfig: { thinkingBudget: 0 },
+  maxOutputTokens: 1024,
 };
 
-const RAZONANDO = {
-  reasoning_format: 'hidden',
-  response_format: { type: 'json_object' },
-  max_tokens: 4096,
+const PENSANDO = {
+  temperature: 0,
+  responseMimeType: 'application/json',
+  thinkingConfig: { thinkingBudget: -1 },
+  maxOutputTokens: 4096,
 };
 
 const INTENTOS = 4;
@@ -83,20 +89,25 @@ function dormir(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// Groq dice exactamente cuanto falta para que se libere la cuota, tanto en la
-// cabecera retry-after como en el texto del error. Respetarlo es mejor que
-// inventar un backoff.
+// Cuando la cuota se agota, la respuesta dice cuanto falta para que se libere.
+// Gemini lo manda como "retryDelay": "34s" en el detalle del error; se respeta
+// eso antes de inventar un backoff.
 function esperaTrasRateLimit(err) {
   if (err?.status !== 429) return null;
 
+  // La cabecera retry-after es el valor estandar y tiene prioridad. Groq la
+  // manda; Gemini no, y ahi el tiempo viene en el detalle del error.
   const cabecera = Number(err.headers?.['retry-after']);
   if (Number.isFinite(cabecera) && cabecera > 0) {
     return Math.min(cabecera * 1000 + 1000, ESPERA_MAXIMA_MS);
   }
 
-  const enElTexto = /try again in ([\d.]+)s/i.exec(err.message || '');
-  if (enElTexto) {
-    return Math.min(Number(enElTexto[1]) * 1000 + 1000, ESPERA_MAXIMA_MS);
+  const texto = err.message || '';
+  // Gemini: "retryDelay":"34s"  ·  Groq (en el texto): "try again in 34s"
+  const match = /retryDelay"?\s*:?\s*"?(\d+(?:\.\d+)?)s/i.exec(texto)
+    || /try again in ([\d.]+)s/i.exec(texto);
+  if (match) {
+    return Math.min(Number(match[1]) * 1000 + 1000, ESPERA_MAXIMA_MS);
   }
 
   return ESPERA_POR_DEFECTO_MS;
@@ -140,70 +151,43 @@ function estaCompleto(datos) {
   return Boolean(datos && (datos.error || (datos.monto && datos.fecha)));
 }
 
-async function extractWithVision(imageBuffer, mimeType) {
+// Primero sin pensar, que es mas rapido; si el resultado sale incompleto se
+// reintenta pensando. Los dos pasos comparten la misma logica de reintentos.
+async function extraerConModelo(descripcion, partes) {
   const rapido = await conReintentos(
-    'vision', () => pedirVision(imageBuffer, mimeType, SIN_RAZONAR),
+    descripcion, () => pedirGemini(partes, SIN_PENSAR),
   ).catch((err) => {
-    console.log(`vision: sin razonar no salió (${err.message})`);
+    console.log(`${descripcion}: sin pensar no salió (${err.message})`);
     return null;
   });
 
   if (estaCompleto(rapido)) return rapido;
 
-  console.log('vision: reintentando con razonamiento...');
-  return conReintentos('vision razonando', () => pedirVision(imageBuffer, mimeType, RAZONANDO));
+  console.log(`${descripcion}: reintentando con razonamiento...`);
+  return conReintentos(`${descripcion} pensando`, () => pedirGemini(partes, PENSANDO));
 }
 
-async function pedirVision(imageBuffer, mimeType, opciones) {
-  const base64Image = imageBuffer.toString('base64');
-
-  const result = await groq().chat.completions.create({
-    model: 'qwen/qwen3.6-27b',
-    messages: [
-      {
-        role: 'user',
-        content: [
-          { type: 'text', text: EXTRACTION_PROMPT },
-          {
-            type: 'image_url',
-            image_url: {
-              url: `data:${mimeType};base64,${base64Image}`,
-            },
-          },
-        ],
-      },
-    ],
-    temperature: 0,
-    ...opciones,
-  });
-
-  const responseText = result.choices[0]?.message?.content || '';
-  const datos = extraerJSON(responseText);
-  if (!datos) throw new Error('No se obtuvo JSON válido');
-  return datos;
+async function extractWithVision(imageBuffer, mimeType) {
+  return extraerConModelo('vision', [
+    { text: EXTRACTION_PROMPT },
+    { inlineData: { mimeType, data: imageBuffer.toString('base64') } },
+  ]);
 }
 
 async function extractWithText(text) {
-  return conReintentos('texto', () => pedirTexto(text));
+  return extraerConModelo('texto', [
+    { text: `${EXTRACTION_PROMPT}\n\nTexto del comprobante:\n${text}` },
+  ]);
 }
 
-async function pedirTexto(text) {
-  const result = await groq().chat.completions.create({
-    model: 'llama-3.3-70b-versatile',
-    messages: [
-      {
-        role: 'user',
-        content: EXTRACTION_PROMPT + '\n\nTexto del comprobante:\n' + text,
-      },
-    ],
-    temperature: 0,
-    // llama no razona, asi que solo hace falta forzarle el JSON.
-    response_format: { type: 'json_object' },
-    max_tokens: 1024,
+async function pedirGemini(partes, config) {
+  const respuesta = await gemini().models.generateContent({
+    model: MODELO,
+    contents: partes,
+    config,
   });
 
-  const responseText = result.choices[0]?.message?.content || '';
-  const datos = extraerJSON(responseText);
+  const datos = extraerJSON(respuesta.text || '');
   if (!datos) throw new Error('No se obtuvo JSON válido');
   return datos;
 }
@@ -214,8 +198,8 @@ async function extractData(imageBuffer, mimeType) {
     const text = (pdf.text || '').trim();
 
     if (text && text.length > 20) {
-      // El parser no gasta cuota de Groq, es instantaneo y siempre devuelve lo
-      // mismo para el mismo comprobante. Solo se cae al modelo si no logra
+      // El parser no gasta cuota de la API, es instantaneo y siempre devuelve
+      // lo mismo para el mismo comprobante. Solo se cae al modelo si no logra
       // sacar los datos con confianza.
       const parseado = parsearComprobante(text);
       if (parseado) {

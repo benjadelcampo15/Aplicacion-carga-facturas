@@ -104,7 +104,7 @@ function diagnosticoPrivateKey(bruta) {
 const PLACEHOLDERS = [
   'id_del_google_sheet',
   'tu_key_aqui',
-  'tu_api_key_de_groq',
+  'tu_api_key_de_gemini',
   'tu_service_account@proyecto.iam.gserviceaccount.com',
 ];
 

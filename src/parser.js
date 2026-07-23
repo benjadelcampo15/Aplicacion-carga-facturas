@@ -1,6 +1,6 @@
 // Extrae los datos de un comprobante bancario argentino leyendo el texto, sin
 // pasar por el modelo. Es determinista, gratis, instantaneo y no consume cuota
-// de Groq, que es lo que dispara el rate limit cuando entra un lote.
+// de la API, que es lo que se agota cuando entra un lote.
 //
 // Es conservador a proposito: si no encuentra monto y fecha con confianza,
 // devuelve null y el llamador cae al modelo. Estos datos van a una planilla de

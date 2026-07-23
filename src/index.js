@@ -23,7 +23,7 @@ const appState = {
 const cola = crearCola();
 
 // Un cliente puede mandar diez comprobantes de golpe. Se encolan y se procesan
-// de a uno; si se atienden en paralelo se agota la cuota de Groq y se pierden.
+// de a uno; si se atienden en paralelo se agota la cuota del modelo y se pierden.
 async function handleComprobante(sock, from, imageBuffer, mimeType, senderInfo) {
   const { posicion, promesa } = cola.encolar(
     () => procesarComprobante(sock, from, imageBuffer, mimeType, senderInfo),
@@ -116,8 +116,8 @@ function mensajeDeError(err) {
 async function main() {
   console.log('Iniciando servicio de conciliación...');
 
-  if (!process.env.GROQ_API_KEY) {
-    console.error('Falta GROQ_API_KEY');
+  if (!process.env.GEMINI_API_KEY && !process.env.GOOGLE_API_KEY) {
+    console.error('Falta GEMINI_API_KEY');
     process.exit(1);
   }
 
