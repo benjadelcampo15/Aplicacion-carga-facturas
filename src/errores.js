@@ -68,6 +68,7 @@ async function guardarFallido({ buffer, mimeType, senderInfo, motivo }) {
     await podar();
 
     await appendError({ motivo, archivo: nombre, tipo: mimeType, senderInfo });
+    invalidarCacheErrores();
 
     console.log(`Comprobante fallado guardado como ${nombre}`);
     return nombre;
@@ -83,9 +84,54 @@ async function leerArchivo(nombre) {
   return fs.readFile(ruta).catch(() => null);
 }
 
+// La pagina se auto-refresca cada 15s y leer los errores es una consulta a
+// Google: sin cache, cada refresco tardaba varios segundos y le pegaba a la API
+// todo el tiempo. Se invalida cuando se guarda un fallido, asi que un error
+// nuevo aparece igual de rapido.
+const CACHE_MS = 60000;
+
+// Google a veces tarda o reintenta por dentro, y la pagina quedaba esperandolo
+// minutos. El dashboard tiene que abrir siempre: si la lista no llega a tiempo,
+// se muestra sin ella.
+const TIMEOUT_MS = 4000;
+
+let cache = { datos: null, expira: 0 };
+
+function invalidarCacheErrores() {
+  cache = { datos: null, expira: 0 };
+}
+
 // Cruza lo anotado en el Sheet con lo que sigue estando en disco: los archivos
 // podados quedan listados pero sin link.
 async function listarErrores(limite = 15) {
+  if (cache.datos && Date.now() < cache.expira) return cache.datos;
+
+  let temporizador;
+  const seAcaboElTiempo = new Promise((resolve) => {
+    temporizador = setTimeout(() => resolve(null), TIMEOUT_MS);
+  });
+
+  try {
+    const datos = await Promise.race([
+      leerListaErrores(limite).catch(() => null),
+      seAcaboElTiempo,
+    ]);
+
+    if (datos === null) {
+      // Se cachea corto igual: si Google esta lento, no tiene sentido
+      // reintentarlo en cada refresco de la pagina.
+      cache = { datos: [], expira: Date.now() + 15000 };
+      return [];
+    }
+
+    cache = { datos, expira: Date.now() + CACHE_MS };
+    return datos;
+  } finally {
+    clearTimeout(temporizador);
+  }
+}
+
+async function leerListaErrores(limite) {
   const filas = await leerErrores();
   const enDisco = new Set(await fs.readdir(DIR_ERRORES).catch(() => []));
 
@@ -107,6 +153,7 @@ module.exports = {
   guardarFallido,
   leerArchivo,
   listarErrores,
+  invalidarCacheErrores,
   esNombreSeguro,
   DATA_DIR,
   DIR_ERRORES,

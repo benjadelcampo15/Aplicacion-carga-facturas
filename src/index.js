@@ -16,6 +16,7 @@ const appState = {
   processed: 0,
   enCola: 0,
   fallidos: 0,
+  ultimos: [],
   lastError: null,
 };
 
@@ -62,6 +63,19 @@ async function procesarComprobante(sock, from, imageBuffer, mimeType, senderInfo
     // planilla, no el bot.
     const ubicacion = await appendRow(data, senderInfo, numeroCliente || '');
     appState.processed++;
+
+    // Para ver en el dashboard que se cargo, sin tener que abrir la planilla.
+    appState.ultimos.unshift({
+      hora: new Date().toISOString(),
+      monto: data.monto,
+      fecha: data.fecha,
+      banco: data.banco_origen || '',
+      chofer: senderInfo?.name || '',
+      cliente: numeroCliente || '',
+      pestania: ubicacion.pestania,
+      fila: ubicacion.fila,
+    });
+    appState.ultimos = appState.ultimos.slice(0, 10);
 
     if (!numeroCliente) vinculador.comprobanteSinNumero(from, ubicacion);
 
