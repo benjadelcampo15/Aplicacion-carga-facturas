@@ -318,16 +318,19 @@ async function appendRow(data, senderInfo, numeroCliente = '') {
   const pestania = nombrePestania(data.fecha);
   const fila = filaComprobante(data, senderInfo, numeroCliente);
 
-  // Se ubica la primera fila libre leyendo la columna A, en vez de dejar que la
-  // API "adivine" la tabla: asi no depende de como esten armadas las columnas
-  // con formulas de la planilla, y se escribe solo A-H sin pisar I ni J.
-  let ocupadas;
+  // La planilla esta llena de BUSCARV contra las pestañas de bancos y cada
+  // lectura por API la obliga a recalcular todo: leer la columna A para buscar
+  // la ultima fila tardaba mas de un minuto y colgaba la carga. Con append es
+  // Google el que ubica la primera fila libre, del lado del servidor, en una
+  // sola llamada. El rango A:H deja I y J (las formulas) sin tocar.
+  let respuesta;
   try {
-    const res = await sheets.spreadsheets.values.get({
+    respuesta = await sheets.spreadsheets.values.append({
       spreadsheetId: process.env.GOOGLE_SHEETS_ID,
-      range: `${pestania}!A:A`,
+      range: `${pestania}!A:H`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: { values: [fila] },
     });
-    ocupadas = (res.data.values || []).length;
   } catch (err) {
     if (/Unable to parse range/i.test(err.message)) {
       throw new Error(`Falta la pestaña "${pestania}" en la planilla`);
@@ -335,63 +338,12 @@ async function appendRow(data, senderInfo, numeroCliente = '') {
     throw err;
   }
 
-  const numeroFila = ocupadas + 1;
-  await sheets.spreadsheets.values.update({
-    spreadsheetId: process.env.GOOGLE_SHEETS_ID,
-    range: `${pestania}!A${numeroFila}:H${numeroFila}`,
-    valueInputOption: 'USER_ENTERED',
-    requestBody: { values: [fila] },
-  });
+  // "'JULIO 2026'!A1229:H1229" -> 1229
+  const rango = respuesta.data.updates?.updatedRange || '';
+  const numeroFila = Number(/![A-Z]+(\d+)/.exec(rango)?.[1]) || null;
 
-  await copiarFormatoDeArriba(sheets, pestania, numeroFila);
-
-  console.log(`Fila ${numeroFila} agregada a "${pestania}":`, fila);
+  console.log(`Fila ${numeroFila ?? '?'} agregada a "${pestania}":`, fila);
   return { pestania, fila: numeroFila };
-}
-
-// Los montos y fechas se guardan como numeros; el "$ 83,500.00" y el
-// "01/07/2026" son formato de la celda. Una fila nueva no lo hereda, asi que se
-// copia el formato de la fila de arriba y queda igual que el resto.
-const idsPestania = new Map();
-
-async function idDePestania(sheets, titulo) {
-  if (idsPestania.has(titulo)) return idsPestania.get(titulo);
-
-  const meta = await sheets.spreadsheets.get({ spreadsheetId: process.env.GOOGLE_SHEETS_ID });
-  const hoja = meta.data.sheets.find((s) => s.properties.title === titulo);
-  const id = hoja ? hoja.properties.sheetId : null;
-  if (id !== null) idsPestania.set(titulo, id);
-  return id;
-}
-
-async function copiarFormatoDeArriba(sheets, pestania, numeroFila) {
-  // Si la fila de arriba es el encabezado no hay de donde copiar formato de dato.
-  if (numeroFila <= 2) return;
-
-  try {
-    const sheetId = await idDePestania(sheets, pestania);
-    if (sheetId === null) return;
-
-    const fuente = {
-      sheetId, startRowIndex: numeroFila - 2, endRowIndex: numeroFila - 1,
-      startColumnIndex: 0, endColumnIndex: 10,
-    };
-    const destino = {
-      sheetId, startRowIndex: numeroFila - 1, endRowIndex: numeroFila,
-      startColumnIndex: 0, endColumnIndex: 10,
-    };
-
-    await sheets.spreadsheets.batchUpdate({
-      spreadsheetId: process.env.GOOGLE_SHEETS_ID,
-      requestBody: {
-        // Solo formato: no copia valores ni formulas.
-        requests: [{ copyPaste: { source: fuente, destination: destino, pasteType: 'PASTE_FORMAT' } }],
-      },
-    });
-  } catch (err) {
-    // El formato es cosmetico: si falla, la fila ya quedo escrita igual.
-    console.error('No pude copiar el formato de la fila anterior:', err.message);
-  }
 }
 
 module.exports = {
