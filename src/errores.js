@@ -68,6 +68,7 @@ async function guardarFallido({ buffer, mimeType, senderInfo, motivo }) {
     await podar();
 
     await appendError({ motivo, archivo: nombre, tipo: mimeType, senderInfo });
+    invalidarCacheErrores();
 
     console.log(`Comprobante fallado guardado como ${nombre}`);
     return nombre;
@@ -83,9 +84,28 @@ async function leerArchivo(nombre) {
   return fs.readFile(ruta).catch(() => null);
 }
 
+// La pagina se auto-refresca cada 15s y leer los errores es una consulta a
+// Google: sin cache, cada refresco tardaba varios segundos y le pegaba a la API
+// todo el tiempo. Se invalida cuando se guarda un fallido, asi que un error
+// nuevo aparece igual de rapido.
+const CACHE_MS = 60000;
+let cache = { datos: null, expira: 0 };
+
+function invalidarCacheErrores() {
+  cache = { datos: null, expira: 0 };
+}
+
 // Cruza lo anotado en el Sheet con lo que sigue estando en disco: los archivos
 // podados quedan listados pero sin link.
 async function listarErrores(limite = 15) {
+  if (cache.datos && Date.now() < cache.expira) return cache.datos;
+
+  const datos = await leerListaErrores(limite);
+  cache = { datos, expira: Date.now() + CACHE_MS };
+  return datos;
+}
+
+async function leerListaErrores(limite) {
   const filas = await leerErrores();
   const enDisco = new Set(await fs.readdir(DIR_ERRORES).catch(() => []));
 
@@ -107,6 +127,7 @@ module.exports = {
   guardarFallido,
   leerArchivo,
   listarErrores,
+  invalidarCacheErrores,
   esNombreSeguro,
   DATA_DIR,
   DIR_ERRORES,
