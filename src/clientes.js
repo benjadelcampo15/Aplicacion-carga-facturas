@@ -3,9 +3,11 @@
 // juntarlos. Todo se guarda POR CHAT: el numero de un chofer nunca se aparea con
 // la foto de otro, porque cada chofer es un chat distinto de WhatsApp.
 
-// Cuanto vive un pendiente sin aparearse. Pasado esto, un numero suelto no se
-// pega a una foto vieja de hace rato.
-const VENTANA_MS = 5 * 60 * 1000;
+// Cuanto vive un pendiente sin aparearse. El chofer no manda el numero al toque:
+// puede tardar varios minutos, asi que la ventana es amplia. Pasado eso se
+// descarta, para que un numero viejo no termine pegado a un comprobante de otro
+// momento.
+const VENTANA_MS = 30 * 60 * 1000;
 
 function crearVinculador({ ahora = () => Date.now() } = {}) {
   // Por chat: numeros esperando una foto, y comprobantes (ya escritos) esperando
@@ -20,11 +22,24 @@ function crearVinculador({ ahora = () => Date.now() } = {}) {
     return lista;
   }
 
-  // Un texto es un numero de cliente si es basicamente solo digitos (hasta 6),
-  // con un "cliente" opcional adelante. "hola" o "gracias" no lo son.
+  // El chofer manda el numero como se le ocurre: "3640", "cliente 3640",
+  // "numero de cliente : 3640", "N° cliente 3640". Se sacan las palabras de
+  // etiqueta y la puntuacion; si lo que queda son solo digitos, ese es el
+  // numero. Si queda cualquier otra palabra ("hola", "llegue a las 3640 de la
+  // calle"), no se toma: es preferible no cargar nada que cargar cualquier cosa.
+  //
+  // El tope de 10 digitos deja afuera un CUIT (11) y un numero de transferencia
+  // (12), que son los que se podrian confundir con un numero de cliente.
   function numeroDeCliente(texto) {
-    const m = /^\s*(?:cliente|cli|n[°º]?)?\s*:?\s*(\d{1,6})\s*$/i.exec(String(texto || ''));
-    return m ? m[1] : null;
+    const limpio = String(texto || '')
+      .normalize('NFD').replace(/[̀-ͯ]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .replace(/\b(?:n|nro|no|num|numero|de|del|el|la|es|para|mi|su|cliente|cli|codigo|cod)\b/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    return /^\d{1,10}$/.test(limpio) ? limpio : null;
   }
 
   // Llega un comprobante. Si trae numero en el epigrafe, ese manda. Si no, se
