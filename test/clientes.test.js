@@ -13,15 +13,34 @@ const CHOFER_A = '5491111111@s.whatsapp.net';
 const CHOFER_B = '5492222222@s.whatsapp.net';
 
 // --- Que cuenta como numero de cliente ---
+// El chofer lo manda como se le ocurre, sin formato fijo.
 const v0 = crearVinculador();
 igual('numero pelado', v0.numeroDeCliente('3640'), '3640');
 igual('con espacios', v0.numeroDeCliente('  3640  '), '3640');
 igual('con la palabra cliente', v0.numeroDeCliente('cliente 3640'), '3640');
 igual('con dos puntos', v0.numeroDeCliente('cliente: 3640'), '3640');
+igual('numero de cliente con dos puntos',
+  v0.numeroDeCliente('numero de cliente : 32132132'), '32132132');
+igual('numero de cliente sin dos puntos',
+  v0.numeroDeCliente('numero de cliente 32132132'), '32132132');
+igual('numero largo pelado', v0.numeroDeCliente('31223132'), '31223132');
+igual('cliente con numero largo', v0.numeroDeCliente('cliente 231321'), '231321');
+igual('con N° adelante', v0.numeroDeCliente('N° cliente 469'), '469');
+igual('con nro', v0.numeroDeCliente('nro cliente 469'), '469');
+igual('en mayusculas', v0.numeroDeCliente('CLIENTE 3640'), '3640');
+igual('el cliente es 3640', v0.numeroDeCliente('el cliente es 3640'), '3640');
+igual('codigo tambien vale', v0.numeroDeCliente('codigo 3640'), '3640');
+
+// Lo que NO tiene que tomar: es preferible no cargar nada que cargar cualquier cosa.
 igual('un saludo no es numero', v0.numeroDeCliente('hola'), null);
 igual('gracias no es numero', v0.numeroDeCliente('gracias!'), null);
-igual('texto con numero adentro no cuenta', v0.numeroDeCliente('llegue a las 3640 de la calle'), null);
-igual('demasiados digitos no cuenta', v0.numeroDeCliente('30707873678'), null);
+igual('texto con numero adentro no cuenta',
+  v0.numeroDeCliente('llegue a las 3640 de la calle'), null);
+igual('un CUIT no cuenta (11 digitos)', v0.numeroDeCliente('30707873678'), null);
+igual('un N° de transferencia no cuenta (12 digitos)',
+  v0.numeroDeCliente('161964705992'), null);
+igual('una frase con numero no cuenta',
+  v0.numeroDeCliente('mandame la plata 3640 gracias'), null);
 igual('vacio no cuenta', v0.numeroDeCliente(''), null);
 
 // --- Numero DESPUES de la foto ---
