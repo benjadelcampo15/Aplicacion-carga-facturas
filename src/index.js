@@ -23,9 +23,20 @@ const appState = {
 const cola = crearCola();
 const vinculador = crearVinculador();
 
+// Comprobantes de cada chat que estan en la cola o procesandose. Sirve para no
+// contestarle "mandame el comprobante" a alguien que ya lo mando.
+const enProceso = new Map();
+
+function sumarEnProceso(chat, delta) {
+  const ahora = (enProceso.get(chat) || 0) + delta;
+  if (ahora > 0) enProceso.set(chat, ahora);
+  else enProceso.delete(chat);
+}
+
 // Un cliente puede mandar diez comprobantes de golpe. Se encolan y se procesan
 // de a uno; si se atienden en paralelo se agota la cuota del modelo y se pierden.
 async function handleComprobante(sock, from, imageBuffer, mimeType, senderInfo, epigrafe) {
+  sumarEnProceso(from, 1);
   const { posicion, promesa } = cola.encolar(
     () => procesarComprobante(sock, from, imageBuffer, mimeType, senderInfo, epigrafe),
   );
@@ -41,13 +52,33 @@ async function handleComprobante(sock, from, imageBuffer, mimeType, senderInfo, 
   try {
     await promesa;
   } finally {
+    sumarEnProceso(from, -1);
     appState.enCola = cola.largo;
   }
 }
 
+// Si una llamada se cuelga sin devolver ni fallar, la cola queda trabada para
+// siempre y no se procesa ni un comprobante mas. Cada paso tiene su limite: al
+// vencerse tira error, se guarda el comprobante como fallido y la cola sigue.
+const LIMITE_MODELO_MS = 3 * 60 * 1000;
+const LIMITE_PLANILLA_MS = 45 * 1000;
+
+function conLimite(promesa, ms, queHacia) {
+  let temporizador;
+  const vencimiento = new Promise((_, rechazar) => {
+    temporizador = setTimeout(
+      () => rechazar(new Error(`Se colgó ${queHacia} (más de ${Math.round(ms / 1000)}s)`)),
+      ms,
+    );
+  });
+  return Promise.race([promesa, vencimiento]).finally(() => clearTimeout(temporizador));
+}
+
 async function procesarComprobante(sock, from, imageBuffer, mimeType, senderInfo, epigrafe) {
   try {
-    const data = await extractData(imageBuffer, mimeType);
+    const data = await conLimite(
+      extractData(imageBuffer, mimeType), LIMITE_MODELO_MS, 'leyendo el comprobante',
+    );
 
     if (data.error) {
       await sock.sendMessage(from, { text: `No pude procesar: ${data.error}` });
@@ -61,7 +92,10 @@ async function procesarComprobante(sock, from, imageBuffer, mimeType, senderInfo
 
     // Se escribe siempre; los repetidos los marca la columna CONTROL de la
     // planilla, no el bot.
-    const ubicacion = await appendRow(data, senderInfo, numeroCliente || '');
+    const ubicacion = await conLimite(
+      appendRow(data, senderInfo, numeroCliente || ''),
+      LIMITE_PLANILLA_MS, 'escribiendo en la planilla',
+    );
     appState.processed++;
 
     // Para ver en el dashboard que se cargo, sin tener que abrir la planilla.
@@ -119,8 +153,13 @@ async function handleTexto(sock, from, texto, senderInfo) {
   const { numero, ubicacion, guardado } = resultado;
 
   if (guardado) {
+    // Puede haber un comprobante suyo todavia en la cola: decirle "mandame el
+    // comprobante" cuando ya lo mando confunde.
+    const esperando = enProceso.get(from) || 0;
     await sock.sendMessage(from, {
-      text: `Anotado el cliente ${numero}. Mandame el comprobante.`,
+      text: esperando
+        ? `Anotado el cliente ${numero}, lo pongo en el comprobante que estoy procesando.`
+        : `Anotado el cliente ${numero}. Mandame el comprobante.`,
     });
     return;
   }
