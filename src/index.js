@@ -61,7 +61,10 @@ async function handleComprobante(sock, from, imageBuffer, mimeType, senderInfo, 
 // siempre y no se procesa ni un comprobante mas. Cada paso tiene su limite: al
 // vencerse tira error, se guarda el comprobante como fallido y la cola sigue.
 const LIMITE_MODELO_MS = 3 * 60 * 1000;
-const LIMITE_PLANILLA_MS = 45 * 1000;
+
+// Escribir con append tarda menos de un segundo. El limite es solo una red por
+// si Google no responde: no hay que esperar minutos para darse cuenta.
+const LIMITE_PLANILLA_MS = 60 * 1000;
 
 function conLimite(promesa, ms, queHacia) {
   let temporizador;
