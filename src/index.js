@@ -2,11 +2,11 @@ require('dotenv').config();
 
 const { startWhatsApp } = require('./whatsapp');
 const { extractData } = require('./extractor');
-const { appendRow, buildClave, buscarDuplicado, validarCredenciales } = require('./sheets');
-const { invalidarCache } = require('./stats');
+const { appendRow, actualizarNumeroCliente, validarCredenciales } = require('./sheets');
 const { crearApp } = require('./web');
 const { crearCola } = require('./cola');
 const { guardarFallido } = require('./errores');
+const { crearVinculador } = require('./clientes');
 
 const PORT = process.env.PORT || 3000;
 
@@ -14,19 +14,19 @@ const appState = {
   qr: null,
   connected: false,
   processed: 0,
-  duplicados: 0,
   enCola: 0,
   fallidos: 0,
   lastError: null,
 };
 
 const cola = crearCola();
+const vinculador = crearVinculador();
 
 // Un cliente puede mandar diez comprobantes de golpe. Se encolan y se procesan
 // de a uno; si se atienden en paralelo se agota la cuota del modelo y se pierden.
-async function handleComprobante(sock, from, imageBuffer, mimeType, senderInfo) {
+async function handleComprobante(sock, from, imageBuffer, mimeType, senderInfo, epigrafe) {
   const { posicion, promesa } = cola.encolar(
-    () => procesarComprobante(sock, from, imageBuffer, mimeType, senderInfo),
+    () => procesarComprobante(sock, from, imageBuffer, mimeType, senderInfo, epigrafe),
   );
   appState.enCola = cola.largo;
 
@@ -44,7 +44,7 @@ async function handleComprobante(sock, from, imageBuffer, mimeType, senderInfo) 
   }
 }
 
-async function procesarComprobante(sock, from, imageBuffer, mimeType, senderInfo) {
+async function procesarComprobante(sock, from, imageBuffer, mimeType, senderInfo, epigrafe) {
   try {
     const data = await extractData(imageBuffer, mimeType);
 
@@ -53,26 +53,25 @@ async function procesarComprobante(sock, from, imageBuffer, mimeType, senderInfo
       return;
     }
 
-    if (await buscarDuplicado(buildClave(data))) {
-      appState.duplicados++;
-      await sock.sendMessage(from, {
-        text: `Este comprobante ya estaba cargado (${data.nombre_origen} - $${data.monto}). No lo dupliqué.`,
-      });
-      console.log(`Duplicado ignorado de ${from}`);
-      return;
-    }
+    // El numero de cliente puede venir en el epigrafe de la foto o en un mensaje
+    // aparte que ya llego. Si todavia no llego, se carga vacio y se recuerda la
+    // fila para completarla cuando llegue.
+    const numeroCliente = vinculador.numeroParaComprobante(from, epigrafe);
 
-    await appendRow(data, senderInfo);
+    // Se escribe siempre; los repetidos los marca la columna CONTROL de la
+    // planilla, no el bot.
+    const ubicacion = await appendRow(data, senderInfo, numeroCliente || '');
     appState.processed++;
-    invalidarCache();
+
+    if (!numeroCliente) vinculador.comprobanteSinNumero(from, ubicacion);
 
     const summary = [
       'Comprobante registrado:',
       `  Monto: $${data.monto}`,
       `  Fecha: ${data.fecha}`,
       `  Origen: ${data.nombre_origen}`,
+      numeroCliente ? `  Cliente: ${numeroCliente}` : '  (mandá el N° de cliente)',
       data.referencia ? `  Ref: ${data.referencia}` : null,
-      data.banco_origen ? `  Banco: ${data.banco_origen}` : null,
     ].filter(Boolean).join('\n');
 
     await sock.sendMessage(from, { text: summary });
@@ -96,6 +95,37 @@ async function procesarComprobante(sock, from, imageBuffer, mimeType, senderInfo
   }
 }
 
+// El chofer manda el N° de cliente en un mensaje aparte. Si ya hay un
+// comprobante suyo esperando, se le completa la columna; si no, queda anotado
+// para el proximo. Todo por chat: el numero de un chofer no toca lo de otro.
+async function handleTexto(sock, from, texto, senderInfo) {
+  const resultado = vinculador.texto(from, texto);
+  if (!resultado) return;
+
+  const { numero, ubicacion, guardado } = resultado;
+
+  if (guardado) {
+    await sock.sendMessage(from, {
+      text: `Anotado el cliente ${numero}. Mandame el comprobante.`,
+    });
+    return;
+  }
+
+  try {
+    await actualizarNumeroCliente(ubicacion, numero);
+    await sock.sendMessage(from, {
+      text: `Listo, le puse el cliente ${numero} al último comprobante.`,
+    });
+  } catch (err) {
+    console.error('No pude escribir el N° de cliente:', err.message);
+    appState.lastError = err.message;
+    await sock.sendMessage(from, {
+      text: `No pude cargar el cliente ${numero}. Avisá para completarlo a mano.`,
+    });
+  }
+  console.log(`N° cliente ${numero} de ${senderInfo?.name || from}`);
+}
+
 // Cada error necesita una accion distinta de quien mando el comprobante: si le
 // decimos "intentá de nuevo" a un rate limit, reintenta al toque y empeora.
 function mensajeDeError(err) {
@@ -109,6 +139,10 @@ function mensajeDeError(err) {
   if (err.message.includes('No se obtuvo JSON')) {
     return 'No pude leer los datos de esta imagen. Probá con una foto más nítida '
       + 'o una captura de pantalla.';
+  }
+  if (err.message.includes('Falta la pestaña')) {
+    return 'Recibí tu comprobante y lo guardé, pero todavía no está creada la '
+      + 'hoja de este mes en la planilla. Se va a cargar en cuanto la creen.';
   }
   return 'Hubo un error procesando el comprobante. Intentá de nuevo.';
 }
@@ -139,7 +173,11 @@ async function main() {
     console.log(`Web corriendo en puerto ${PORT}`);
   });
 
-  Object.assign(control, await startWhatsApp(handleComprobante, appState));
+  Object.assign(control, await startWhatsApp({
+    onComprobante: handleComprobante,
+    onTexto: handleTexto,
+    appState,
+  }));
 }
 
 main();

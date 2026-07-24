@@ -12,7 +12,7 @@ const RECONEXION_MAX_MS = 60000;
 const DATA_DIR = process.env.DATA_DIR || './data';
 const AUTH_DIR = process.env.AUTH_DIR || path.join(DATA_DIR, 'auth_info');
 
-async function startWhatsApp(onReceiveImage, appState) {
+async function startWhatsApp({ onComprobante, onTexto, appState }) {
   let intentos = 0;
   let reconexionPendiente = false;
   let timerReconexion = null;
@@ -136,13 +136,17 @@ async function startWhatsApp(onReceiveImage, appState) {
 
         const imageMessage = msg.message?.imageMessage;
         const documentMessage = msg.message?.documentMessage;
+        const texto = msg.message?.conversation
+          || msg.message?.extendedTextMessage?.text
+          || '';
 
         if (imageMessage) {
           try {
             const buffer = await downloadMediaMessage(msg, 'buffer', {});
             const mimeType = imageMessage.mimetype || 'image/jpeg';
             console.log(`Imagen recibida de ${senderName} (${senderNumber})`);
-            await onReceiveImage(sock, from, buffer, mimeType, senderInfo);
+            // El epigrafe de la foto puede traer el numero de cliente.
+            await onComprobante(sock, from, buffer, mimeType, senderInfo, imageMessage.caption || '');
           } catch (err) {
             console.error('Error descargando imagen:', err.message);
           }
@@ -152,11 +156,14 @@ async function startWhatsApp(onReceiveImage, appState) {
             try {
               const buffer = await downloadMediaMessage(msg, 'buffer', {});
               console.log(`PDF recibido de ${senderName} (${senderNumber})`);
-              await onReceiveImage(sock, from, buffer, mimeType, senderInfo);
+              await onComprobante(sock, from, buffer, mimeType, senderInfo, documentMessage.caption || '');
             } catch (err) {
               console.error('Error descargando PDF:', err.message);
             }
           }
+        } else if (texto.trim()) {
+          // Un mensaje de texto puede ser el numero de cliente de un comprobante.
+          await onTexto(sock, from, texto, senderInfo);
         }
       }
     });

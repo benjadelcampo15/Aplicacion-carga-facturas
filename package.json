@@ -8,7 +8,7 @@
     "check:sheets": "node scripts/check-sheets.js",
     "push:vars": "node scripts/push-vars.js",
     "probar": "node scripts/probar.js",
-    "test": "node test/clave.test.js && node test/web.test.js && node test/reinicio.test.js && node test/credenciales.test.js && node test/conciliacion.test.js && node test/cola.test.js && node test/pdf.test.js && node test/errores.test.js && node test/parser.test.js && node test/json.test.js"
+    "test": "node test/clientes.test.js && node test/sheets.test.js && node test/web.test.js && node test/reinicio.test.js && node test/credenciales.test.js && node test/cola.test.js && node test/pdf.test.js && node test/errores.test.js && node test/parser.test.js && node test/json.test.js"
   },
   "keywords": [],
   "author": "",

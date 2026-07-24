@@ -2,15 +2,8 @@ const crypto = require('crypto');
 const { google } = require('googleapis');
 const { aNumero } = require('./parser');
 
-const SHEET_NAME = 'Hoja 1';
 const HOJA_ERRORES = 'Errores';
 const HEADERS_ERRORES = ['Timestamp', 'Remitente', 'Telefono', 'Motivo', 'Archivo', 'Tipo'];
-
-// Claves de los comprobantes que se estan escribiendo en este instante. Solo
-// cubren la ventana del append en curso: apenas termina, manda el Sheet. Si se
-// quedaran para siempre, borrar una fila a mano no liberaria el duplicado y el
-// mismo comprobante seguiria dando "repetido" hasta reiniciar el proceso.
-const clavesEnProceso = new Set();
 
 const PEM = /-----BEGIN ([A-Z ]+)-----([\s\S]*?)-----END \1-----/;
 
@@ -143,43 +136,69 @@ function getAuth() {
   });
 }
 
-function normalizar(valor) {
-  return String(valor ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+const MESES = ['ENERO', 'FEBRERO', 'MARZO', 'ABRIL', 'MAYO', 'JUNIO', 'JULIO',
+  'AGOSTO', 'SEPTIEMBRE', 'OCTUBRE', 'NOVIEMBRE', 'DICIEMBRE'];
+
+// La fecha del modelo/parser viene como YYYY-MM-DD. Se valida en serio porque de
+// esto sale en que pestaña de mes se escribe: un mes equivocado descoloca la
+// conciliacion.
+function partesFecha(fechaISO) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(fechaISO || '').trim());
+  if (!m) return null;
+  const anio = Number(m[1]);
+  const mes = Number(m[2]);
+  const dia = Number(m[3]);
+  if (mes < 1 || mes > 12 || dia < 1 || dia > 31) return null;
+  return { anio, mes, dia };
 }
 
-// Misma lectura que el resto: si el monto llega formateado, "66.842" tiene que
-// dar sesenta y seis mil, no sesenta y seis. Si la clave se armara con el valor
-// mal leido, el mismo comprobante daria claves distintas segun como llegue.
-function normalizarMonto(monto) {
-  const numero = aNumero(monto);
-  return numero === null ? normalizar(monto) : numero.toFixed(2);
+// La pestaña se llama por el mes de la transferencia: "JULIO 2026".
+function nombrePestania(fechaISO) {
+  const p = partesFecha(fechaISO);
+  if (!p) throw new Error(`No pude determinar el mes del comprobante (fecha "${fechaISO}")`);
+  return `${MESES[p.mes - 1]} ${p.anio}`;
 }
 
-// Dos comprobantes son el mismo si comparten referencia y monto. Muchos
-// comprobantes vienen sin referencia, así que ahí caemos a fecha+monto+origen.
-function buildClave(data) {
-  const monto = normalizarMonto(data.monto);
-  const referencia = normalizar(data.referencia).replace(/[^a-z0-9]/g, '');
+function fechaARgentina(fechaISO) {
+  const p = partesFecha(fechaISO);
+  if (!p) return String(fechaISO || '');
+  const dd = String(p.dia).padStart(2, '0');
+  const mm = String(p.mes).padStart(2, '0');
+  return `${dd}/${mm}/${p.anio}`;
+}
 
-  if (referencia) {
-    return `ref:${referencia}|${monto}`;
+// La columna Banco de la planilla usa nombres cortos en mayuscula (SANTANDER,
+// NACION, SUPERVIELLE). El modelo devuelve variantes ("Banco Nación", "Santander
+// Río"), asi que se mapean las conocidas para que la columna ESTADO las cruce
+// bien; el resto queda en mayuscula sin acentos.
+const BANCOS_CANONICOS = [
+  [/santander/i, 'SANTANDER'],
+  [/naci[oó]n/i, 'NACION'],
+  [/supervielle/i, 'SUPERVIELLE'],
+  [/galicia/i, 'GALICIA'],
+  [/macro/i, 'MACRO'],
+  [/brubank/i, 'BRUBANK'],
+  [/ual[aá]/i, 'UALA'],
+  [/mercado\s*pago/i, 'MERCADO PAGO'],
+  [/naranja/i, 'NARANJA X'],
+  [/bbva|frances/i, 'BBVA'],
+  [/provincia/i, 'PROVINCIA'],
+  [/ciudad/i, 'CIUDAD'],
+  [/credicoop/i, 'CREDICOOP'],
+];
+
+function bancoNormalizado(banco) {
+  const texto = String(banco || '').trim();
+  if (!texto) return '';
+
+  for (const [patron, canonico] of BANCOS_CANONICOS) {
+    if (patron.test(texto)) return canonico;
   }
-  return `alt:${normalizar(data.fecha)}|${monto}|${normalizar(data.nombre_origen)}`;
-}
 
-async function buscarDuplicado(clave) {
-  if (clavesEnProceso.has(clave)) return true;
-
-  const auth = getAuth();
-  const sheets = google.sheets({ version: 'v4', auth });
-
-  const res = await sheets.spreadsheets.values.get({
-    spreadsheetId: process.env.GOOGLE_SHEETS_ID,
-    range: `${SHEET_NAME}!L:L`,
-  });
-
-  const claves = (res.data.values || []).flat();
-  return claves.includes(clave);
+  return texto
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/^banco\s+/i, '')
+    .toUpperCase();
 }
 
 // La pestaña de errores se crea sola la primera vez que algo falla, para no
@@ -254,65 +273,134 @@ async function leerErrores() {
   }
 }
 
-// Devuelve las filas de datos (sin el header) tal como estan en el Sheet.
-async function leerFilas() {
-  const auth = getAuth();
-  const sheets = google.sheets({ version: 'v4', auth });
 
-  const res = await sheets.spreadsheets.values.get({
-    spreadsheetId: process.env.GOOGLE_SHEETS_ID,
-    range: `${SHEET_NAME}!A:L`,
-  });
-
-  const filas = res.data.values || [];
-  return filas.slice(1);
+// Arma la fila A-H de la planilla de choferes.
+//
+// Las unicas columnas que se cargan son Fecha, N° Transferencia, Banco,
+// N° Cliente, Monto y Chofer. E (CUIT cliente) y H (CUIT titular bancario) no
+// se usan y quedan vacias. I y J (ESTADO y CONTROL) no se tocan: son formulas
+// de la planilla.
+//
+// El chofer es el nombre del contacto de WhatsApp; el N° Cliente lo manda el
+// chofer en un mensaje aparte, asi que puede venir vacio y completarse despues.
+function filaComprobante(data, senderInfo, numeroCliente = '') {
+  const monto = aNumero(data.monto);
+  return [
+    fechaARgentina(data.fecha),          // A Fecha
+    data.referencia || '',               // B N° Transferencia
+    bancoNormalizado(data.banco_origen), // C Banco
+    numeroCliente || '',                 // D N° Cliente
+    '',                                  // E CUIT cliente (no se usa)
+    monto === null ? (data.monto || '') : monto, // F Monto (numero)
+    senderInfo?.name || '',              // G Chofer
+    '',                                  // H CUIT titular bancario (no se usa)
+  ];
 }
 
-async function appendRow(data, senderInfo) {
+// Escribe el N° Cliente (columna D) en una fila ya cargada, cuando el numero
+// llega despues del comprobante.
+async function actualizarNumeroCliente({ pestania, fila }, numeroCliente) {
   const auth = getAuth();
   const sheets = google.sheets({ version: 'v4', auth });
-  const clave = buildClave(data);
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+    range: `${pestania}!D${fila}`,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values: [[numeroCliente]] },
+  });
+  console.log(`N° Cliente ${numeroCliente} puesto en "${pestania}" fila ${fila}`);
+}
 
-  const row = [
-    new Date().toISOString(),
-    data.fecha || '',
-    data.tipo_operacion || '',
-    data.nombre_origen || '',
-    data.monto || '',
-    data.cbu_origen || '',
-    data.banco_origen || '',
-    data.referencia || '',
-    data.concepto || '',
-    senderInfo?.name || '',
-    senderInfo?.number || '',
-    clave,
-  ];
+async function appendRow(data, senderInfo, numeroCliente = '') {
+  const auth = getAuth();
+  const sheets = google.sheets({ version: 'v4', auth });
 
-  clavesEnProceso.add(clave);
+  const pestania = nombrePestania(data.fecha);
+  const fila = filaComprobante(data, senderInfo, numeroCliente);
 
+  // Se ubica la primera fila libre leyendo la columna A, en vez de dejar que la
+  // API "adivine" la tabla: asi no depende de como esten armadas las columnas
+  // con formulas de la planilla, y se escribe solo A-H sin pisar I ni J.
+  let ocupadas;
   try {
-    await sheets.spreadsheets.values.append({
+    const res = await sheets.spreadsheets.values.get({
       spreadsheetId: process.env.GOOGLE_SHEETS_ID,
-      range: `${SHEET_NAME}!A:L`,
-      valueInputOption: 'USER_ENTERED',
-      requestBody: {
-        values: [row],
-      },
+      range: `${pestania}!A:A`,
     });
-  } finally {
-    // Ya quedo en el Sheet (o fallo): de aca en mas el duplicado lo detecta la
-    // lectura de la columna L, no esta lista en memoria.
-    clavesEnProceso.delete(clave);
+    ocupadas = (res.data.values || []).length;
+  } catch (err) {
+    if (/Unable to parse range/i.test(err.message)) {
+      throw new Error(`Falta la pestaña "${pestania}" en la planilla`);
+    }
+    throw err;
   }
 
-  console.log('Fila agregada al Sheet:', row);
+  const numeroFila = ocupadas + 1;
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+    range: `${pestania}!A${numeroFila}:H${numeroFila}`,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values: [fila] },
+  });
+
+  await copiarFormatoDeArriba(sheets, pestania, numeroFila);
+
+  console.log(`Fila ${numeroFila} agregada a "${pestania}":`, fila);
+  return { pestania, fila: numeroFila };
+}
+
+// Los montos y fechas se guardan como numeros; el "$ 83,500.00" y el
+// "01/07/2026" son formato de la celda. Una fila nueva no lo hereda, asi que se
+// copia el formato de la fila de arriba y queda igual que el resto.
+const idsPestania = new Map();
+
+async function idDePestania(sheets, titulo) {
+  if (idsPestania.has(titulo)) return idsPestania.get(titulo);
+
+  const meta = await sheets.spreadsheets.get({ spreadsheetId: process.env.GOOGLE_SHEETS_ID });
+  const hoja = meta.data.sheets.find((s) => s.properties.title === titulo);
+  const id = hoja ? hoja.properties.sheetId : null;
+  if (id !== null) idsPestania.set(titulo, id);
+  return id;
+}
+
+async function copiarFormatoDeArriba(sheets, pestania, numeroFila) {
+  // Si la fila de arriba es el encabezado no hay de donde copiar formato de dato.
+  if (numeroFila <= 2) return;
+
+  try {
+    const sheetId = await idDePestania(sheets, pestania);
+    if (sheetId === null) return;
+
+    const fuente = {
+      sheetId, startRowIndex: numeroFila - 2, endRowIndex: numeroFila - 1,
+      startColumnIndex: 0, endColumnIndex: 10,
+    };
+    const destino = {
+      sheetId, startRowIndex: numeroFila - 1, endRowIndex: numeroFila,
+      startColumnIndex: 0, endColumnIndex: 10,
+    };
+
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+      requestBody: {
+        // Solo formato: no copia valores ni formulas.
+        requests: [{ copyPaste: { source: fuente, destination: destino, pasteType: 'PASTE_FORMAT' } }],
+      },
+    });
+  } catch (err) {
+    // El formato es cosmetico: si falla, la fila ya quedo escrita igual.
+    console.error('No pude copiar el formato de la fila anterior:', err.message);
+  }
 }
 
 module.exports = {
   appendRow,
-  buildClave,
-  buscarDuplicado,
-  leerFilas,
+  actualizarNumeroCliente,
+  filaComprobante,
+  nombrePestania,
+  fechaARgentina,
+  bancoNormalizado,
   normalizarPrivateKey,
   diagnosticoPrivateKey,
   validarCredenciales,

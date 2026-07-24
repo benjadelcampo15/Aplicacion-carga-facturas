@@ -1,14 +1,7 @@
 const express = require('express');
-const { getStats } = require('./stats');
 const { listarErrores, leerArchivo } = require('./errores');
 
 const ZONA = 'America/Argentina/Buenos_Aires';
-
-const pesos = new Intl.NumberFormat('es-AR', {
-  style: 'currency',
-  currency: 'ARS',
-  maximumFractionDigits: 0,
-});
 
 // Los nombres salen del comprobante via modelo, asi que no son confiables.
 function esc(valor) {
@@ -17,11 +10,6 @@ function esc(valor) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
-}
-
-function diaCorto(iso) {
-  const [, mes, dia] = iso.split('-');
-  return `${dia}/${mes}`;
 }
 
 function horaLocal(iso) {
@@ -136,52 +124,6 @@ function acciones() {
   </div>`;
 }
 
-function grafico(serie) {
-  const max = Math.max(...serie.map((d) => d.cargas), 1);
-  const hoy = serie[serie.length - 1]?.dia;
-
-  const barras = serie.map((d) => `
-    <div class="bar ${d.dia === hoy ? 'hoy' : ''}" title="${esc(d.dia)}: ${d.cargas} cargas">
-      <span class="n">${d.cargas || ''}</span>
-      <div class="fill" style="height:${(d.cargas / max) * 100}%"></div>
-      <span class="d">${diaCorto(d.dia)}</span>
-    </div>`).join('');
-
-  return `<div class="chart">${barras}</div>`;
-}
-
-const ETIQUETA = {
-  conciliado: { texto: 'Concilia', clase: 'si' },
-  pendiente: { texto: 'Pendiente', clase: 'pend' },
-  no_concilia: { texto: 'No concilia', clase: 'no' },
-};
-
-function conciliacion(stats) {
-  const { conciliacion: c, conciliacionSimulada } = stats;
-  const total = c.conciliado.cantidad + c.pendiente.cantidad + c.no_concilia.cantidad;
-  const porcentaje = (n) => (total ? Math.round((n / total) * 100) : 0);
-
-  const aviso = conciliacionSimulada ? `
-    <div class="demo">
-      <strong>DATOS SIMULADOS</strong>
-      <span>Todavía no se cruza contra extractos ni facturas. Estos números son
-      inventados y no representan conciliaciones reales.</span>
-    </div>` : '';
-
-  const tarjeta = (clase, titulo, dato) => `
-    <div class="card ${clase}">
-      <div class="label">${titulo}</div>
-      <div class="value">${dato.cantidad}</div>
-      <div class="sub">${porcentaje(dato.cantidad)}% · ${pesos.format(dato.monto)}</div>
-    </div>`;
-
-  return `${aviso}
-    <div class="conc ${conciliacionSimulada ? 'simulado' : ''}">
-      ${tarjeta('si', 'Concilian', c.conciliado)}
-      ${tarjeta('pend', 'Pendientes', c.pendiente)}
-      ${tarjeta('no', 'No concilian', c.no_concilia)}
-    </div>`;
-}
 
 function tablaErrores(errores) {
   if (!errores.length) {
@@ -207,91 +149,32 @@ function tablaErrores(errores) {
     <tbody>${filas}</tbody></table>`;
 }
 
-function tabla(ultimas) {
-  if (!ultimas.length) {
-    return '<div class="vacio">Todavía no hay comprobantes cargados</div>';
-  }
-
-  const filas = ultimas.map((c) => {
-    const etiqueta = ETIQUETA[c.conciliado] || ETIQUETA.pendiente;
-    return `
-    <tr>
-      <td>${esc(horaLocal(c.timestamp))}</td>
-      <td>${esc(c.origen) || '<span style="color:#5c5c66">sin dato</span>'}
-        <span class="tag ${etiqueta.clase}">${etiqueta.texto}</span></td>
-      <td style="color:#8b8b93">${esc(c.remitente)}</td>
-      <td class="monto">${pesos.format(c.monto)}</td>
-    </tr>`;
-  }).join('');
-
-  return `<table>
-    <thead><tr><th>Cargado</th><th>Origen</th><th>Lo mandó</th>
-    <th class="monto">Monto</th></tr></thead>
-    <tbody>${filas}</tbody></table>`;
-}
-
-function dashboard(appState, stats, error, errores = []) {
-  const promedio = stats && stats.diasActivos
-    ? (stats.totalCargas / stats.diasActivos).toFixed(1)
-    : '0';
-
-  const aviso = error
-    ? `<div class="err">No pude leer el Sheet: ${esc(error)}</div>`
-    : '';
-
-  const contenido = stats ? `
+// La conciliacion de verdad vive en la planilla (columna ESTADO). El dashboard
+// solo muestra el estado del bot: si esta conectado, cuanto proceso desde que
+// arranco, que hay en cola y que fallo.
+function dashboard(appState, errores = []) {
+  const contenido = `
     <div class="cards">
       <div class="card hoy">
-        <div class="label">Cargas hoy</div>
-        <div class="value">${stats.hoy.cargas}</div>
-      </div>
-      <div class="card hoy">
-        <div class="label">Monto hoy</div>
-        <div class="value sm">${pesos.format(stats.hoy.monto)}</div>
-      </div>
-      <div class="card">
-        <div class="label">Total cargas</div>
-        <div class="value">${stats.totalCargas}</div>
-      </div>
-      <div class="card">
-        <div class="label">Monto total</div>
-        <div class="value sm">${pesos.format(stats.montoTotal)}</div>
-      </div>
-      <div class="card">
-        <div class="label">Promedio por día activo</div>
-        <div class="value">${promedio}</div>
-      </div>
-      <div class="card">
-        <div class="label">Duplicados ignorados</div>
-        <div class="value">${appState.duplicados}</div>
+        <div class="label">Procesados</div>
+        <div class="value">${appState.processed}</div>
+        <div class="sub">desde que arrancó el bot</div>
       </div>
       <div class="card ${appState.enCola ? 'pend' : ''}">
         <div class="label">En cola</div>
         <div class="value">${appState.enCola || 0}</div>
         ${appState.enCola ? '<div class="sub">esperando al modelo</div>' : ''}
       </div>
+      <div class="card">
+        <div class="label">Con error</div>
+        <div class="value">${appState.fallidos}</div>
+      </div>
     </div>
-
-    <section>
-      <h2>Conciliación</h2>
-      ${conciliacion(stats)}
-    </section>
-
-    <section>
-      <h2>Últimos 14 días</h2>
-      ${grafico(stats.serie)}
-    </section>
-
-    <section>
-      <h2>Últimas cargas</h2>
-      ${tabla(stats.ultimas)}
-    </section>
 
     <section>
       <h2>Comprobantes con error${errores.length ? ` (${errores.length})` : ''}</h2>
       ${tablaErrores(errores)}
-    </section>
-  ` : '';
+    </section>`;
 
   const cuerpo = `
     <header>
@@ -301,7 +184,6 @@ function dashboard(appState, stats, error, errores = []) {
       </span>
     </header>
     ${acciones()}
-    ${aviso}
     ${contenido}
     <footer>Se actualiza solo cada 15s${appState.lastError ? ` · último error: ${esc(appState.lastError)}` : ''}</footer>`;
 
@@ -362,18 +244,10 @@ function crearApp(appState, control) {
       return res.send(appState.qr ? pantallaQR(appState.qr) : pantallaConectando());
     }
 
-    // Si el Sheet falla igual mostramos la pagina: el estado de la conexion
-    // es lo mas importante y no depende de Google.
-    try {
-      const [stats, errores] = await Promise.all([
-        getStats(),
-        listarErrores().catch(() => []),
-      ]);
-      res.send(dashboard(appState, stats, null, errores));
-    } catch (err) {
-      console.error('Error leyendo stats:', err.message);
-      res.send(dashboard(appState, null, err.message));
-    }
+    // Si leer los errores falla, igual mostramos la pagina: el estado de la
+    // conexion es lo mas importante y no depende de Google.
+    const errores = await listarErrores().catch(() => []);
+    res.send(dashboard(appState, errores));
   });
 
   // El nombre viene de una celda del Sheet y termina en una ruta del disco:
@@ -393,7 +267,6 @@ function crearApp(appState, control) {
     res.json({
       connected: appState.connected,
       processed: appState.processed,
-      duplicados: appState.duplicados,
       enCola: appState.enCola,
       fallidos: appState.fallidos,
       // Para saber que version esta corriendo sin tener que deducirlo de los
