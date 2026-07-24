@@ -275,15 +275,16 @@ async function leerErrores() {
 
 
 // Arma la fila A-H de la planilla de choferes. I y J (ESTADO y CONTROL) no se
-// tocan: son formulas de la planilla. D (N° Cliente) y E (CUIT) quedan vacias,
-// se cargan a mano. El chofer es el nombre del contacto de WhatsApp.
-function filaComprobante(data, senderInfo) {
+// tocan: son formulas de la planilla. E (CUIT) queda vacia, se carga a mano. El
+// chofer es el nombre del contacto de WhatsApp; el N° Cliente lo manda el chofer
+// en un mensaje aparte, asi que puede venir vacio y completarse despues.
+function filaComprobante(data, senderInfo, numeroCliente = '') {
   const monto = aNumero(data.monto);
   return [
     fechaARgentina(data.fecha),          // A Fecha
     data.referencia || '',               // B Transferencia
     bancoNormalizado(data.banco_origen), // C Banco
-    '',                                  // D N° Cliente
+    numeroCliente || '',                 // D N° Cliente
     '',                                  // E CUIT / DNI
     monto === null ? (data.monto || '') : monto, // F Monto (numero)
     senderInfo?.name || '',              // G Chofer
@@ -291,12 +292,26 @@ function filaComprobante(data, senderInfo) {
   ];
 }
 
-async function appendRow(data, senderInfo) {
+// Escribe el N° Cliente (columna D) en una fila ya cargada, cuando el numero
+// llega despues del comprobante.
+async function actualizarNumeroCliente({ pestania, fila }, numeroCliente) {
+  const auth = getAuth();
+  const sheets = google.sheets({ version: 'v4', auth });
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+    range: `${pestania}!D${fila}`,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values: [[numeroCliente]] },
+  });
+  console.log(`N° Cliente ${numeroCliente} puesto en "${pestania}" fila ${fila}`);
+}
+
+async function appendRow(data, senderInfo, numeroCliente = '') {
   const auth = getAuth();
   const sheets = google.sheets({ version: 'v4', auth });
 
   const pestania = nombrePestania(data.fecha);
-  const fila = filaComprobante(data, senderInfo);
+  const fila = filaComprobante(data, senderInfo, numeroCliente);
 
   // Se ubica la primera fila libre leyendo la columna A, en vez de dejar que la
   // API "adivine" la tabla: asi no depende de como esten armadas las columnas
@@ -324,10 +339,12 @@ async function appendRow(data, senderInfo) {
   });
 
   console.log(`Fila ${numeroFila} agregada a "${pestania}":`, fila);
+  return { pestania, fila: numeroFila };
 }
 
 module.exports = {
   appendRow,
+  actualizarNumeroCliente,
   filaComprobante,
   nombrePestania,
   fechaARgentina,
