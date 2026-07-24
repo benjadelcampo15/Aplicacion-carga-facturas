@@ -89,6 +89,12 @@ async function leerArchivo(nombre) {
 // todo el tiempo. Se invalida cuando se guarda un fallido, asi que un error
 // nuevo aparece igual de rapido.
 const CACHE_MS = 60000;
+
+// Google a veces tarda o reintenta por dentro, y la pagina quedaba esperandolo
+// minutos. El dashboard tiene que abrir siempre: si la lista no llega a tiempo,
+// se muestra sin ella.
+const TIMEOUT_MS = 4000;
+
 let cache = { datos: null, expira: 0 };
 
 function invalidarCacheErrores() {
@@ -100,9 +106,29 @@ function invalidarCacheErrores() {
 async function listarErrores(limite = 15) {
   if (cache.datos && Date.now() < cache.expira) return cache.datos;
 
-  const datos = await leerListaErrores(limite);
-  cache = { datos, expira: Date.now() + CACHE_MS };
-  return datos;
+  let temporizador;
+  const seAcaboElTiempo = new Promise((resolve) => {
+    temporizador = setTimeout(() => resolve(null), TIMEOUT_MS);
+  });
+
+  try {
+    const datos = await Promise.race([
+      leerListaErrores(limite).catch(() => null),
+      seAcaboElTiempo,
+    ]);
+
+    if (datos === null) {
+      // Se cachea corto igual: si Google esta lento, no tiene sentido
+      // reintentarlo en cada refresco de la pagina.
+      cache = { datos: [], expira: Date.now() + 15000 };
+      return [];
+    }
+
+    cache = { datos, expira: Date.now() + CACHE_MS };
+    return datos;
+  } finally {
+    clearTimeout(temporizador);
+  }
 }
 
 async function leerListaErrores(limite) {

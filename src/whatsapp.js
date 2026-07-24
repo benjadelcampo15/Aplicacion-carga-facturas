@@ -6,6 +6,19 @@ const QRCode = require('qrcode');
 const RECONEXION_BASE_MS = 1000;
 const RECONEXION_MAX_MS = 60000;
 
+// Baileys espera un logger tipo pino. Se le pasa uno que no escribe nada, para
+// que en los logs del deploy queden solo los mensajes del bot.
+const LOGGER_SILENCIOSO = {
+  level: 'silent',
+  child: () => LOGGER_SILENCIOSO,
+  trace: () => {},
+  debug: () => {},
+  info: () => {},
+  warn: () => {},
+  error: () => {},
+  fatal: () => {},
+};
+
 // En Railway el filesystem es efimero: DATA_DIR apunta al volumen montado, y
 // adentro viven tanto la sesion de WhatsApp como los comprobantes fallados.
 // AUTH_DIR sigue existiendo aparte para no romper instalaciones que ya lo usan.
@@ -79,6 +92,15 @@ async function startWhatsApp({ onComprobante, onTexto, appState }) {
     const sock = makeWASocket({
       auth: state,
       printQRInTerminal: false,
+      // Sin esto Baileys escribe cada evento interno, incluido el volcado del
+      // historial de WhatsApp en payloads de cientos de KB. Los logs quedan
+      // ilegibles y no se ve si el bot conecto o que fallo.
+      logger: LOGGER_SILENCIOSO,
+      // El bot solo necesita los mensajes que llegan de ahora en mas. Pedir el
+      // historial completo tarda minutos y deja la conexion colgada en
+      // "conectando" mientras se descarga.
+      syncFullHistory: false,
+      markOnlineOnConnect: false,
     });
     sockActual = sock;
 
@@ -91,16 +113,22 @@ async function startWhatsApp({ onComprobante, onTexto, appState }) {
         appState.connected = false;
       }
 
+      if (connection === 'connecting') {
+        console.log('WhatsApp: conectando...');
+      }
+
       if (connection === 'close') {
         appState.connected = false;
         appState.qr = null;
+
+        const reason = lastDisconnect?.error?.output?.statusCode;
+        console.log(`WhatsApp: conexión cerrada (motivo ${reason ?? 'desconocido'})`);
 
         // Un reinicio manual se encarga el mismo de reconectar.
         if (reinicioEnCurso) return;
 
         // Baileys destruye sus propios listeners al cerrar (end -> ev.destroy),
         // asi que el socket viejo no sigue escuchando: solo hay que reconectar.
-        const reason = lastDisconnect?.error?.output?.statusCode;
         if (reason === DisconnectReason.loggedOut) {
           console.log('Sesion cerrada. Usá "Desvincular" en la web para escanear de nuevo.');
           appState.lastError = 'Sesión cerrada desde el teléfono. Desvinculá y escaneá de nuevo.';

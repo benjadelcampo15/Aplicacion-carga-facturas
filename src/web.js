@@ -149,6 +149,29 @@ function tablaErrores(errores) {
     <tbody>${filas}</tbody></table>`;
 }
 
+// Lo que se cargo desde que arranco el bot. Sale de memoria, sin consultar la
+// planilla: sirve para ver de un vistazo que esta entrando y en que fila quedo.
+function tablaUltimos(ultimos) {
+  if (!ultimos.length) {
+    return '<div class="vacio">Todavía no se cargó ningún comprobante</div>';
+  }
+
+  const filas = ultimos.map((u) => `
+    <tr>
+      <td>${esc(horaLocal(u.hora))}</td>
+      <td class="monto">$${esc(u.monto)}</td>
+      <td>${esc(u.banco)}</td>
+      <td>${esc(u.chofer)}</td>
+      <td>${u.cliente ? esc(u.cliente) : '<span style="color:#fbbf24">falta</span>'}</td>
+      <td style="color:#8b8b93">${esc(u.pestania)} · fila ${esc(u.fila)}</td>
+    </tr>`).join('');
+
+  return `<table>
+    <thead><tr><th>Cargado</th><th class="monto">Monto</th><th>Banco</th>
+    <th>Chofer</th><th>Cliente</th><th>Dónde</th></tr></thead>
+    <tbody>${filas}</tbody></table>`;
+}
+
 // La conciliacion de verdad vive en la planilla (columna ESTADO). El dashboard
 // solo muestra el estado del bot: si esta conectado, cuanto proceso desde que
 // arranco, que hay en cola y que fallo.
@@ -170,6 +193,11 @@ function dashboard(appState, errores = []) {
         <div class="value">${appState.fallidos}</div>
       </div>
     </div>
+
+    <section>
+      <h2>Últimos cargados</h2>
+      ${tablaUltimos(appState.ultimos || [])}
+    </section>
 
     <section>
       <h2>Comprobantes con error${errores.length ? ` (${errores.length})` : ''}</h2>
