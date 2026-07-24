@@ -274,21 +274,26 @@ async function leerErrores() {
 }
 
 
-// Arma la fila A-H de la planilla de choferes. I y J (ESTADO y CONTROL) no se
-// tocan: son formulas de la planilla. E (CUIT) queda vacia, se carga a mano. El
-// chofer es el nombre del contacto de WhatsApp; el N° Cliente lo manda el chofer
-// en un mensaje aparte, asi que puede venir vacio y completarse despues.
+// Arma la fila A-H de la planilla de choferes.
+//
+// Las unicas columnas que se cargan son Fecha, N° Transferencia, Banco,
+// N° Cliente, Monto y Chofer. E (CUIT cliente) y H (CUIT titular bancario) no
+// se usan y quedan vacias. I y J (ESTADO y CONTROL) no se tocan: son formulas
+// de la planilla.
+//
+// El chofer es el nombre del contacto de WhatsApp; el N° Cliente lo manda el
+// chofer en un mensaje aparte, asi que puede venir vacio y completarse despues.
 function filaComprobante(data, senderInfo, numeroCliente = '') {
   const monto = aNumero(data.monto);
   return [
     fechaARgentina(data.fecha),          // A Fecha
-    data.referencia || '',               // B Transferencia
+    data.referencia || '',               // B N° Transferencia
     bancoNormalizado(data.banco_origen), // C Banco
     numeroCliente || '',                 // D N° Cliente
-    '',                                  // E CUIT / DNI
+    '',                                  // E CUIT cliente (no se usa)
     monto === null ? (data.monto || '') : monto, // F Monto (numero)
     senderInfo?.name || '',              // G Chofer
-    data.nombre_origen || '',            // H Titular banco
+    '',                                  // H CUIT titular bancario (no se usa)
   ];
 }
 
@@ -338,8 +343,55 @@ async function appendRow(data, senderInfo, numeroCliente = '') {
     requestBody: { values: [fila] },
   });
 
+  await copiarFormatoDeArriba(sheets, pestania, numeroFila);
+
   console.log(`Fila ${numeroFila} agregada a "${pestania}":`, fila);
   return { pestania, fila: numeroFila };
+}
+
+// Los montos y fechas se guardan como numeros; el "$ 83,500.00" y el
+// "01/07/2026" son formato de la celda. Una fila nueva no lo hereda, asi que se
+// copia el formato de la fila de arriba y queda igual que el resto.
+const idsPestania = new Map();
+
+async function idDePestania(sheets, titulo) {
+  if (idsPestania.has(titulo)) return idsPestania.get(titulo);
+
+  const meta = await sheets.spreadsheets.get({ spreadsheetId: process.env.GOOGLE_SHEETS_ID });
+  const hoja = meta.data.sheets.find((s) => s.properties.title === titulo);
+  const id = hoja ? hoja.properties.sheetId : null;
+  if (id !== null) idsPestania.set(titulo, id);
+  return id;
+}
+
+async function copiarFormatoDeArriba(sheets, pestania, numeroFila) {
+  // Si la fila de arriba es el encabezado no hay de donde copiar formato de dato.
+  if (numeroFila <= 2) return;
+
+  try {
+    const sheetId = await idDePestania(sheets, pestania);
+    if (sheetId === null) return;
+
+    const fuente = {
+      sheetId, startRowIndex: numeroFila - 2, endRowIndex: numeroFila - 1,
+      startColumnIndex: 0, endColumnIndex: 10,
+    };
+    const destino = {
+      sheetId, startRowIndex: numeroFila - 1, endRowIndex: numeroFila,
+      startColumnIndex: 0, endColumnIndex: 10,
+    };
+
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+      requestBody: {
+        // Solo formato: no copia valores ni formulas.
+        requests: [{ copyPaste: { source: fuente, destination: destino, pasteType: 'PASTE_FORMAT' } }],
+      },
+    });
+  } catch (err) {
+    // El formato es cosmetico: si falla, la fila ya quedo escrita igual.
+    console.error('No pude copiar el formato de la fila anterior:', err.message);
+  }
 }
 
 module.exports = {

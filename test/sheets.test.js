@@ -50,13 +50,19 @@ const fila = filaComprobante(data, { name: 'Villegas', number: '549110' });
 
 igual('la fila tiene 8 columnas (A-H)', fila.length, 8);
 igual('A = fecha argentina', fila[0], '22/07/2026');
-igual('B = transferencia', fila[1], '424279 5675');
+igual('B = N° transferencia', fila[1], '424279 5675');
 igual('C = banco normalizado', fila[2], 'SANTANDER');
-igual('D = N° cliente vacio', fila[3], '');
-igual('E = CUIT vacio', fila[4], '');
+igual('D = N° cliente vacio si no llego', fila[3], '');
+igual('E = CUIT cliente no se usa', fila[4], '');
 igual('F = monto como numero', fila[5], 66842);
 igual('G = chofer del whatsapp', fila[6], 'Villegas');
-igual('H = titular', fila[7], 'Carolina Chavarria');
+// El nombre del titular NO va: la columna H es el CUIT del titular, no el
+// nombre, y no se usa. Meter el nombre ahi ensuciaba la planilla.
+igual('H = CUIT titular no se usa', fila[7], '');
+
+// El N° de cliente llega en un mensaje aparte y va en la columna D.
+igual('D = N° cliente cuando llego',
+  filaComprobante(data, { name: 'Villegas' }, '3640')[3], '3640');
 
 // El monto puede llegar formateado como texto: tiene que salir numero real.
 igual('monto formateado se convierte',
