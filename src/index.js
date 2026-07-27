@@ -196,9 +196,9 @@ function mensajeDeError(err) {
     return 'No pude leer los datos de esta imagen. Probá con una foto más nítida '
       + 'o una captura de pantalla.';
   }
-  if (err.message.includes('Falta la pestaña')) {
-    return 'Recibí tu comprobante y lo guardé, pero todavía no está creada la '
-      + 'hoja de este mes en la planilla. Se va a cargar en cuanto la creen.';
+  if (err.message.includes('Falta la hoja')) {
+    return 'Recibí tu comprobante y lo guardé, pero falta la hoja COMPROBANTES '
+      + 'en la planilla. Se va a cargar en cuanto la creen.';
   }
   return 'Hubo un error procesando el comprobante. Intentá de nuevo.';
 }
