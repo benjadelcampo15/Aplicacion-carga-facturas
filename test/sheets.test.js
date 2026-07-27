@@ -1,5 +1,5 @@
 const {
-  nombrePestania, fechaARgentina, bancoNormalizado, filaComprobante,
+  fechaARgentina, bancoNormalizado, filaComprobante,
 } = require('../src/sheets');
 
 const checks = [];
@@ -10,15 +10,6 @@ function igual(nombre, obtenido, esperado) {
   const ok = JSON.stringify(obtenido) === JSON.stringify(esperado);
   check(nombre, ok, ok ? '' : `obtuvo ${JSON.stringify(obtenido)}`);
 }
-
-// --- Pestaña por mes de la transferencia ---
-igual('julio', nombrePestania('2026-07-22'), 'JULIO 2026');
-igual('enero', nombrePestania('2026-01-05'), 'ENERO 2026');
-igual('diciembre otro año', nombrePestania('2025-12-31'), 'DICIEMBRE 2025');
-check('fecha invalida tira error',
-  (() => { try { nombrePestania('no-es-fecha'); return false; } catch { return true; } })());
-check('fecha vacia tira error',
-  (() => { try { nombrePestania(''); return false; } catch { return true; } })());
 
 // --- Fecha a formato argentino ---
 igual('fecha DD/MM/YYYY', fechaARgentina('2026-07-22'), '22/07/2026');

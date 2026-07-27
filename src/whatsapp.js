@@ -8,6 +8,21 @@ const RECONEXION_MAX_MS = 60000;
 
 // Baileys espera un logger tipo pino. Se le pasa uno que no escribe nada, para
 // que en los logs del deploy queden solo los mensajes del bot.
+// IDs de los ultimos mensajes procesados, para descartar los que WhatsApp
+// entrega repetidos. Se acota para no crecer sin limite.
+const vistos = new Set();
+const MAX_VISTOS = 500;
+
+function yaVisto(id) {
+  if (!id) return false;
+  if (vistos.has(id)) return true;
+  vistos.add(id);
+  if (vistos.size > MAX_VISTOS) {
+    vistos.delete(vistos.values().next().value);
+  }
+  return false;
+}
+
 const LOGGER_SILENCIOSO = {
   level: 'silent',
   child: () => LOGGER_SILENCIOSO,
@@ -145,9 +160,17 @@ async function startWhatsApp({ onComprobante, onTexto, appState }) {
       }
     });
 
-    sock.ev.on('messages.upsert', async ({ messages }) => {
+    sock.ev.on('messages.upsert', async ({ messages, type }) => {
+      // "notify" son los mensajes nuevos. "append"/"prepend" es historial que
+      // WhatsApp sincroniza: procesarlos cargaria comprobantes viejos de nuevo.
+      if (type !== 'notify') return;
+
       for (const msg of messages) {
         if (msg.key.fromMe) continue;
+
+        // WhatsApp puede entregar el mismo mensaje mas de una vez. Sin esto, una
+        // sola foto se cargaba dos veces en la planilla.
+        if (yaVisto(msg.key.id)) continue;
 
         const from = msg.key.remoteJid;
 

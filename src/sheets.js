@@ -2,6 +2,10 @@ const crypto = require('crypto');
 const { google } = require('googleapis');
 const { aNumero } = require('./parser');
 
+// Todos los comprobantes van a una sola hoja. La fecha sigue yendo en la
+// columna A como dato; ya no decide en que pestaña se escribe.
+const HOJA_COMPROBANTES = 'COMPROBANTES';
+
 const HOJA_ERRORES = 'Errores';
 const HEADERS_ERRORES = ['Timestamp', 'Remitente', 'Telefono', 'Motivo', 'Archivo', 'Tipo'];
 
@@ -136,12 +140,8 @@ function getAuth() {
   });
 }
 
-const MESES = ['ENERO', 'FEBRERO', 'MARZO', 'ABRIL', 'MAYO', 'JUNIO', 'JULIO',
-  'AGOSTO', 'SEPTIEMBRE', 'OCTUBRE', 'NOVIEMBRE', 'DICIEMBRE'];
-
-// La fecha del modelo/parser viene como YYYY-MM-DD. Se valida en serio porque de
-// esto sale en que pestaña de mes se escribe: un mes equivocado descoloca la
-// conciliacion.
+// La fecha del modelo/parser viene como YYYY-MM-DD. Se valida antes de armar la
+// fecha DD/MM/YYYY que va en la columna A.
 function partesFecha(fechaISO) {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(fechaISO || '').trim());
   if (!m) return null;
@@ -150,13 +150,6 @@ function partesFecha(fechaISO) {
   const dia = Number(m[3]);
   if (mes < 1 || mes > 12 || dia < 1 || dia > 31) return null;
   return { anio, mes, dia };
-}
-
-// La pestaña se llama por el mes de la transferencia: "JULIO 2026".
-function nombrePestania(fechaISO) {
-  const p = partesFecha(fechaISO);
-  if (!p) throw new Error(`No pude determinar el mes del comprobante (fecha "${fechaISO}")`);
-  return `${MESES[p.mes - 1]} ${p.anio}`;
 }
 
 function fechaARgentina(fechaISO) {
@@ -315,7 +308,6 @@ async function appendRow(data, senderInfo, numeroCliente = '') {
   const auth = getAuth();
   const sheets = google.sheets({ version: 'v4', auth });
 
-  const pestania = nombrePestania(data.fecha);
   const fila = filaComprobante(data, senderInfo, numeroCliente);
 
   // La planilla esta llena de BUSCARV contra las pestañas de bancos y cada
@@ -327,30 +319,29 @@ async function appendRow(data, senderInfo, numeroCliente = '') {
   try {
     respuesta = await sheets.spreadsheets.values.append({
       spreadsheetId: process.env.GOOGLE_SHEETS_ID,
-      range: `${pestania}!A:H`,
+      range: `${HOJA_COMPROBANTES}!A:H`,
       valueInputOption: 'USER_ENTERED',
       requestBody: { values: [fila] },
     });
   } catch (err) {
     if (/Unable to parse range/i.test(err.message)) {
-      throw new Error(`Falta la pestaña "${pestania}" en la planilla`);
+      throw new Error(`Falta la hoja "${HOJA_COMPROBANTES}" en la planilla`);
     }
     throw err;
   }
 
-  // "'JULIO 2026'!A1229:H1229" -> 1229
+  // "COMPROBANTES!A1229:H1229" -> 1229
   const rango = respuesta.data.updates?.updatedRange || '';
   const numeroFila = Number(/![A-Z]+(\d+)/.exec(rango)?.[1]) || null;
 
-  console.log(`Fila ${numeroFila ?? '?'} agregada a "${pestania}":`, fila);
-  return { pestania, fila: numeroFila };
+  console.log(`Fila ${numeroFila ?? '?'} agregada a "${HOJA_COMPROBANTES}":`, fila);
+  return { pestania: HOJA_COMPROBANTES, fila: numeroFila };
 }
 
 module.exports = {
   appendRow,
   actualizarNumeroCliente,
   filaComprobante,
-  nombrePestania,
   fechaARgentina,
   bancoNormalizado,
   normalizarPrivateKey,
