@@ -1,6 +1,6 @@
 const fs = require('fs/promises');
 const path = require('path');
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, downloadMediaMessage } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, downloadMediaMessage, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const QRCode = require('qrcode');
 
 const RECONEXION_BASE_MS = 1000;
@@ -104,8 +104,20 @@ async function startWhatsApp({ onComprobante, onTexto, appState }) {
   async function conectar() {
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
 
+    // WhatsApp rechaza con error 405 (y nunca manda el QR) si la version del
+    // protocolo que trae Baileys quedo vieja. Se pide la actual a WhatsApp; si
+    // falla, se sigue con la que trae Baileys.
+    let version;
+    try {
+      ({ version } = await fetchLatestBaileysVersion());
+      console.log('WhatsApp: usando versión de protocolo', version.join('.'));
+    } catch (err) {
+      console.log('No pude obtener la versión de WhatsApp, uso la de Baileys:', err.message);
+    }
+
     const sock = makeWASocket({
       auth: state,
+      version,
       printQRInTerminal: false,
       // Sin esto Baileys escribe cada evento interno, incluido el volcado del
       // historial de WhatsApp en payloads de cientos de KB. Los logs quedan
