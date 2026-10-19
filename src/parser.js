@@ -123,15 +123,23 @@ function buscarMonto(texto) {
     if (monto) return conCentavosSueltos(plano, match, monto);
   }
 
-  // Sin etiqueta: el importe mas grande con formato de pesos.
-  const sueltos = [...plano.matchAll(/(?:\$|ARS)\s*([\d.]+,\d{2}|[\d.,]+)/g)]
-    .map((m) => {
-      const monto = aNumero(m[1]);
-      return monto ? conCentavosSueltos(plano, m, monto) : null;
-    })
-    .filter(Boolean);
+  // Sin etiqueta: se juntan los importes con signo $, pero descartando los que
+  // en realidad son numeros de CUENTA. "Cuenta a debitar CC$ 462862475" lleva
+  // el $ pegado a "CC" (cuenta corriente), y sin esto se tomaba esa cuenta de
+  // 9 cifras como monto en vez del real.
+  const candidatos = [];
+  for (const m of plano.matchAll(/(cc|ca|cbu|cvu)?\s*(?:\$|ARS)\s*([\d.]+,\d{2}|[\d.,]+)/gi)) {
+    if (m[1]) continue; // va precedido de CC/CA/CBU/CVU: es una cuenta, no un monto
+    const monto = aNumero(m[2]);
+    if (monto) candidatos.push({ monto: conCentavosSueltos(plano, m, monto), conCentavos: /,\d{2}$/.test(m[2]) });
+  }
+  if (!candidatos.length) return null;
 
-  return sueltos.length ? Math.max(...sueltos) : null;
+  // Un importe con centavos ("$ 72.204,00") es mas confiable que un entero
+  // pelado, que suele ser un numero de cuenta o de operacion.
+  const conCentavos = candidatos.filter((c) => c.conCentavos);
+  const elegibles = conCentavos.length ? conCentavos : candidatos;
+  return Math.max(...elegibles.map((c) => c.monto));
 }
 
 // Varios comprobantes muestran los centavos en chico, y al extraer el texto
@@ -231,6 +239,7 @@ function buscarBanco(texto) {
 function buscarReferencia(texto) {
   const valor = valorDeEtiqueta(texto, [
     'id\\s*op\\.?',
+    'identificador\\s+de\\s+la\\s+operaci[oó]n',
     'n[°ºo]?\\s*de\\s*operaci[oó]n',
     'n[uú]mero\\s+de\\s+operaci[oó]n',
     'c[oó]digo\\s+de\\s+(?:operaci[oó]n|transferencia)',

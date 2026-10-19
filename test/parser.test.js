@@ -103,6 +103,37 @@ igual('Santander: CBU de origen, no el de destino',
   s?.cbu_origen, '0720441220000000482990');
 igual('Santander: referencia', s?.referencia, '4242795675');
 
+// --- Office Banking (pago a proveedores), texto real que fallo en produccion ---
+// El numero de cuenta a debitar "CC$ 462862475" se tomaba como monto en vez del
+// real "$ 72.204,00", y la referencia agarraba la etiqueta "de la operacion".
+const officeBanking = `
+Identificador de la operación: LRAKAdk287
+Datos del pago
+Tipo de transferenciaNro. de Transferencia
+Proveedores1
+Fecha de envíoMonto
+19/10/2026$ 72.204,00
+ConceptoDescripción
+Varios-
+Datos del pagador
+CUIT/CUILRazón Social
+30717791351PIKY POLLO S. A. S.
+Cuenta a debitar
+CC$ 462862475
+Datos del destinatario
+CUIT/CUILRazón social
+30707873678Switch Company Sa
+Cuenta enCuenta de destino
+Banco Santander0720441220000000482990
+COMPROBANTE DE LA OPERACIÓN`;
+
+const ob = parsearComprobante(officeBanking);
+check('Office Banking: lo parsea', ob !== null);
+igual('Office Banking: monto real, no el nro de cuenta', ob?.monto, 72204);
+igual('Office Banking: no toma la cuenta a debitar (462862475)', ob?.monto !== 462862475, true);
+igual('Office Banking: referencia sin la etiqueta', ob?.referencia, 'LRAKAdk287');
+igual('Office Banking: fecha', ob?.fecha, '2026-10-19');
+
 // --- Supervielle, texto real extraido de un PDF que llego por WhatsApp ---
 // Los centavos caen en la linea de abajo porque en el comprobante van en chico.
 const supervielle = `SUPERVIELLE
