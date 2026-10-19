@@ -213,6 +213,52 @@ async function extractWithText(text) {
   ]);
 }
 
+const PROMPT_BANCO = 'Este es un comprobante de pago bancario argentino. '
+  + 'Respondé SOLO un JSON {"banco": "NOMBRE"} con el banco o billetera de quien '
+  + 'PAGA, que suele estar como logo o marca arriba (ej. Galicia, Santander, '
+  + 'Nación, Supervielle, Mercado Pago, BBVA, Macro). Si no se distingue, '
+  + 'devolvé {"banco": null}.';
+
+// Algunos PDF muestran el banco solo como logo (imagen). El parser lee texto,
+// asi que no lo ve. Se renderiza el PDF y se le pide a la IA SOLO el banco. No
+// se usa extraerJSON porque ese exige campos de comprobante (monto, fecha...) y
+// esta respuesta trae solo {"banco": ...}; se lee el banco directo del texto.
+async function bancoDesdeLogo(pdfBuffer) {
+  let render;
+  try {
+    render = await renderizarPrimeraPagina(pdfBuffer);
+  } catch (err) {
+    console.error('No pude renderizar el PDF para leer el banco:', err.message);
+    return null;
+  }
+
+  const partes = [
+    { text: PROMPT_BANCO },
+    { inlineData: { mimeType: render.mime, data: render.buffer.toString('base64') } },
+  ];
+
+  let ultimo;
+  for (const modelo of MODELOS) {
+    try {
+      const respuesta = await gemini().models.generateContent({
+        model: modelo, contents: partes, config: SIN_PENSAR,
+      });
+      const m = /"banco"\s*:\s*"([^"]+)"/i.exec(respuesta.text || '');
+      return m ? m[1].trim() : null;
+    } catch (err) {
+      ultimo = err;
+      if (modeloCaido(err)) {
+        console.log(`banco: ${modelo} no disponible, pruebo otro modelo`);
+        continue;
+      }
+      console.error('No pude leer el banco del logo:', err.message);
+      return null;
+    }
+  }
+  console.error('No pude leer el banco del logo:', ultimo?.message);
+  return null;
+}
+
 async function pedirGemini(modelo, partes, config) {
   const respuesta = await gemini().models.generateContent({
     model: modelo,
@@ -236,7 +282,14 @@ async function extractData(imageBuffer, mimeType) {
       // sacar los datos con confianza.
       const parseado = parsearComprobante(text);
       if (parseado) {
-        console.log(`PDF con texto, extraído sin IA (monto ${parseado.monto}, ${parseado.fecha})`);
+        // El banco suele estar como logo (imagen), que el parser no lee. Si
+        // falta, se le pide a la IA solo ese dato, renderizando el PDF.
+        if (!parseado.banco_origen) {
+          const banco = await bancoDesdeLogo(imageBuffer);
+          if (banco) parseado.banco_origen = banco;
+        }
+        console.log(`PDF con texto, extraído sin IA (monto ${parseado.monto}, `
+          + `${parseado.fecha}, banco ${parseado.banco_origen || '—'})`);
         return parseado;
       }
 
