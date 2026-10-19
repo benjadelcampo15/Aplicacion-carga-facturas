@@ -1,5 +1,5 @@
 const { crearCola } = require('../src/cola');
-const { esperaTrasRateLimit, esReintentable, conReintentos } = require('../src/extractor');
+const { esperaTrasRateLimit, esReintentable, modeloCaido, conReintentos } = require('../src/extractor');
 
 const checks = [];
 function check(nombre, ok) {
@@ -83,14 +83,26 @@ async function main() {
   check('un error que no es 429 no genera espera',
     esperaTrasRateLimit(Object.assign(new Error('otra cosa'), { status: 400 })) === null);
 
-  // --- Que se reintenta y que no ---
+  // --- Que se reintenta sobre el MISMO modelo y que no ---
   check('reintenta el rate limit', esReintentable(error429(1)) === true);
-  check('reintenta errores del servidor',
-    esReintentable(Object.assign(new Error('boom'), { status: 503 })) === true);
   check('reintenta cuando el modelo no devuelve JSON',
     esReintentable(new Error('No se obtuvo JSON válido')) === true);
+  // Un 5xx NO se reintenta sobre el mismo modelo: se cae a otro modelo.
+  check('no reintenta un 503 sobre el mismo modelo',
+    esReintentable(Object.assign(new Error('boom'), { status: 503 })) === false);
   check('no reintenta un pedido invalido',
     esReintentable(Object.assign(new Error('mal'), { status: 400 })) === false);
+
+  // --- Deteccion de modelo caido (para el fallback de modelo) ---
+  check('un 503 cuenta como modelo caido',
+    modeloCaido(Object.assign(new Error('x'), { status: 503 })) === true);
+  check('un 500 cuenta como modelo caido',
+    modeloCaido(Object.assign(new Error('x'), { status: 500 })) === true);
+  check('"high demand" en el texto cuenta como caido',
+    modeloCaido(new Error('This model is currently experiencing high demand')) === true);
+  check('un 429 no es modelo caido', modeloCaido(error429(1)) === false);
+  check('un 400 no es modelo caido',
+    modeloCaido(Object.assign(new Error('x'), { status: 400 })) === false);
 
   // --- El reintento efectivamente recupera ---
   // No dormimos de verdad, pero registramos cuanto se habria esperado.

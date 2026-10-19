@@ -4,10 +4,14 @@ const { renderizarPrimeraPagina } = require('./pdf');
 const { parsearComprobante } = require('./parser');
 const { extraerJSON } = require('./json');
 
-// gemini-3.1-flash-lite esta en el plan gratuito (1500 requests por dia), lee
-// imagenes y no tiene el tope de tokens por minuto que traia problemas. Se
-// eligio por prueba: gemini-2.5-flash da 404 para cuentas nuevas.
-const MODELO = 'gemini-3.1-flash-lite';
+// Se prueban en orden. Un modelo "lite" o preview se satura y devuelve 503
+// ("high demand"), y ahi se cae al siguiente en vez de perder el comprobante.
+// El primero es el mas estable; los demas son respaldo por si ese se cae.
+const MODELOS = [
+  'gemini-3.5-flash',
+  'gemini-3-flash-preview',
+  'gemini-3.1-flash-lite',
+];
 
 // Perezoso: creado al importar, el modulo revienta si falta la key antes de que
 // index.js llegue a avisar cual falta.
@@ -114,12 +118,19 @@ function esperaTrasRateLimit(err) {
   return ESPERA_POR_DEFECTO_MS;
 }
 
-// El modelo a veces devuelve texto en vez de JSON. Reintentar suele alcanzar,
-// y es preferible a descartarle el comprobante a alguien.
+// El modelo a veces devuelve texto en vez de JSON. Reintentar sobre el MISMO
+// modelo suele alcanzar. El rate limit (429) tambien, respetando la espera. Los
+// 5xx NO se reintentan aca: significan que el modelo esta caido, asi que
+// conviene cambiar de modelo en vez de insistir con el mismo.
 function esReintentable(err) {
   return err?.status === 429
-    || err?.status >= 500
     || /No se obtuvo JSON válido/.test(err?.message || '');
+}
+
+// El modelo esta saturado o caido: no sirve insistir, hay que probar otro.
+function modeloCaido(err) {
+  return err?.status >= 500
+    || /UNAVAILABLE|overloaded|high demand/i.test(err?.message || '');
 }
 
 // esperar se puede reemplazar en los tests: si no, la suite se pasa un minuto
@@ -152,12 +163,13 @@ function estaCompleto(datos) {
   return Boolean(datos && (datos.error || (datos.monto && datos.fecha)));
 }
 
-// Primero sin pensar, que es mas rapido; si el resultado sale incompleto se
-// reintenta pensando. Los dos pasos comparten la misma logica de reintentos.
-async function extraerConModelo(descripcion, partes) {
+// Primero sin pensar, que es mas rapido; si sale incompleto se reintenta
+// pensando. Ambos pasos sobre el MISMO modelo, con sus reintentos.
+async function extraerConUnModelo(descripcion, modelo, partes) {
   const rapido = await conReintentos(
-    descripcion, () => pedirGemini(partes, SIN_PENSAR),
+    `${descripcion} (${modelo})`, () => pedirGemini(modelo, partes, SIN_PENSAR),
   ).catch((err) => {
+    if (modeloCaido(err)) throw err; // que lo agarre el fallback de modelo
     console.log(`${descripcion}: sin pensar no salió (${err.message})`);
     return null;
   });
@@ -165,7 +177,27 @@ async function extraerConModelo(descripcion, partes) {
   if (estaCompleto(rapido)) return rapido;
 
   console.log(`${descripcion}: reintentando con razonamiento...`);
-  return conReintentos(`${descripcion} pensando`, () => pedirGemini(partes, PENSANDO));
+  return conReintentos(`${descripcion} (${modelo}) pensando`, () => pedirGemini(modelo, partes, PENSANDO));
+}
+
+// Prueba los modelos en orden. Si uno esta caido o saturado (503), pasa al
+// siguiente en vez de perder el comprobante. Un error que no es de
+// disponibilidad (ej. imagen ilegible) corta: cambiar de modelo no ayudaria.
+async function extraerConModelo(descripcion, partes) {
+  let ultimo;
+  for (const modelo of MODELOS) {
+    try {
+      return await extraerConUnModelo(descripcion, modelo, partes);
+    } catch (err) {
+      ultimo = err;
+      if (modeloCaido(err)) {
+        console.log(`${descripcion}: ${modelo} no disponible (${err.status}), pruebo otro modelo`);
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw ultimo;
 }
 
 async function extractWithVision(imageBuffer, mimeType) {
@@ -181,9 +213,9 @@ async function extractWithText(text) {
   ]);
 }
 
-async function pedirGemini(partes, config) {
+async function pedirGemini(modelo, partes, config) {
   const respuesta = await gemini().models.generateContent({
-    model: MODELO,
+    model: modelo,
     contents: partes,
     config,
   });
@@ -251,6 +283,7 @@ module.exports = {
   extractData,
   esperaTrasRateLimit,
   esReintentable,
+  modeloCaido,
   conReintentos,
   EXTRACTION_PROMPT,
 };

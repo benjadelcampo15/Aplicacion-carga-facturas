@@ -192,6 +192,11 @@ function mensajeDeError(err) {
     return 'Estamos al límite de procesamiento en este momento. '
       + 'Reenviame este comprobante en un par de minutos.';
   }
+  // Todos los modelos de lectura estan caidos/saturados (503).
+  if (err.status >= 500 || /UNAVAILABLE|overloaded|high demand/i.test(err.message)) {
+    return 'El servicio de lectura está saturado en este momento. '
+      + 'Guardé tu comprobante; reenviámelo en unos minutos.';
+  }
   if (err.message.includes('No se obtuvo JSON')) {
     return 'No pude leer los datos de esta imagen. Probá con una foto más nítida '
       + 'o una captura de pantalla.';
